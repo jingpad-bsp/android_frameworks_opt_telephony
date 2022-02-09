@@ -79,6 +79,14 @@ public abstract class CallTracker extends Handler {
         mNeedsPoll = true;
 
         if (checkNoOperationsPending()) {
+            if (mLastRelevantPoll != null) {
+                //UNISOC: add for bug890856
+                log("pollCallsWhenSafe: mLastRelevantPoll " + mLastRelevantPoll.what);
+                if (mLastRelevantPoll.what == EVENT_POLL_CALLS_RESULT) {
+                    pollCallsAfterDelay();
+                    return;
+                }
+            }
             mLastRelevantPoll = obtainMessage(EVENT_POLL_CALLS_RESULT);
             mCi.getCurrentCalls(mLastRelevantPoll);
         }
@@ -293,6 +301,15 @@ public abstract class CallTracker extends Handler {
         return ret;
     }
 
+    //UNISOC: add for bug890941
+    public Connection getRingingHandoverConnection () {
+        for (Connection hoConn : mHandoverConnections) {
+            if (hoConn.getCall().isRinging()) {
+                return hoConn;
+            }
+        }
+        return null;
+    }
     //***** Overridden from Handler
     @Override
     public abstract void handleMessage (Message msg);

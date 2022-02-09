@@ -23,7 +23,7 @@ import com.android.internal.telephony.CommandsInterface;
 /**
  * {@hide}
  */
-public final class SIMFileHandler extends IccFileHandler implements IccConstants {
+public class SIMFileHandler extends IccFileHandler implements IccConstants {
     static final String LOG_TAG = "SIMFileHandler";
 
     //***** Instance Variables

@@ -210,3 +210,37 @@ public enum ResultCode {
         return null;
     }
 }
+
+/*UNISOC: Feature for REFRESH function @{ */
+enum AddinfoMeProblem {
+    NO_SPECIFIC_CAUSE(0x00),  // No specific cause can be given;
+    SCREEN_BUSY(0x01),        // Screen is busy;
+    BUSY_ON_CALL(0x02),       // ME currently busy on call;
+    BUSY_ON_SS(0x03),         // ME currently busy on SS transaction;
+    NO_SERVICE(0x04),         // No service;
+    ACCESS_BAR(0x05),         // Access control class bar;
+    RADIO_NOT_GRANTED(0x06),  // Radio resource not granted;
+    NOT_IN_SPEECH_CALL(0x07), // Not in speech call;
+    BUSY_ON_USSD(0x08),       // ME currently busy on USSD transaction;
+    BUSY_ON_DTMF(0x09);       // ME currently busy on SEND DTMF command.
+
+    private int mValue;
+
+    AddinfoMeProblem(int value) {
+        mValue = value;
+    }
+
+    public int value() {
+        return mValue;
+    }
+
+    public static AddinfoMeProblem fromInt(int value) {
+        for (AddinfoMeProblem e : AddinfoMeProblem.values()) {
+            if (e.mValue == value) {
+                return e;
+            }
+        }
+        return null;
+    }
+}
+/*UNISOC: @}*/

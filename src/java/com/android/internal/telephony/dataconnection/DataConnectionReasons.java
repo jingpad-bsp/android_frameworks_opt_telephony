@@ -115,7 +115,9 @@ public class DataConnectionReasons {
         RADIO_DISABLED_BY_CARRIER(true),
         APN_NOT_CONNECTABLE(true),
         ON_IWLAN(true),
-        IN_ECBM(true);
+        IN_ECBM(true),
+        //UNISOC:decouple data connection
+        VENDOR_SPECIFIC(true);
 
         private boolean mIsHardReason;
 

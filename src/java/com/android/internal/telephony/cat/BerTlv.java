@@ -151,9 +151,11 @@ class BerTlv {
             // then the whole BER-TLV data object shall be rejected. The
             // result field in the TERMINAL RESPONSE shall have the error
             // condition "Command data not understood by ME".
-            if (length != totalLength) {
+            /*UNISOC: Feature bug for Stk Feature @{*/
+            if (length != totalLength && ((length - totalLength) != 1)) {
                 isLengthValid = false;
             }
+            /*UNISOC: @}*/
         }
 
         return new BerTlv(tag, ctlvs, isLengthValid);

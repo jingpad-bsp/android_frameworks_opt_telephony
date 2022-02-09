@@ -106,4 +106,7 @@ public interface IccConstants {
 
     //UICC access
     static final String DF_ADF = "7FFF";
+
+    // 3GPP2 C.S0065 EF_ESNME to store MEID
+    static final int EF_ESNME = 0x6F38;
 }

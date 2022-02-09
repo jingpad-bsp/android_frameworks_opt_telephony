@@ -283,6 +283,13 @@ public final class NetworkScanRequestTracker {
         public void binderDied() {
             Log.e(TAG, "PhoneInterfaceManager NetworkScanRequestInfo binderDied("
                     + mRequest + ", " + mBinder + ")");
+            Phone[] phones = (Phone[])PhoneFactory.getPhones();
+            for (int i = 0; i < phones.length; i++) {
+                Phone phone = phones[i];
+                if (!phone.getDataEnabledSettings().isInternalDataEnabled()) {
+                    phone.getDataEnabledSettings().setInternalDataEnabled(true);
+                }
+            }
             setIsBinderDead(true);
             interruptNetworkScan(mScanId);
         }
@@ -398,9 +405,15 @@ public final class NetworkScanRequestTracker {
                 return;
             }
             if (ar.exception == null && ar.result != null) {
+                /* UNISOC: Bug1173649 Register for scan results immediately while network scan is started,
+                 * because network can results indication is asynchronous, and sometimes may reported earlier than scan done @{*
+                 *
                 // Register for the scan results if the scan started successfully.
                 nsri.mPhone.mCi.registerForNetworkScanResult(mHandler,
                         EVENT_RECEIVE_NETWORK_SCAN_RESULT, nsri);
+                /* @{ */
+                Log.d(TAG,"startScanDone");
+                /* @} */
             } else {
                 logEmptyResultOrException(ar);
                 if (ar.exception != null) {
@@ -487,18 +500,23 @@ public final class NetworkScanRequestTracker {
                 return;
             }
             if (ar.exception == null && ar.result != null) {
-                deleteScanAndMayNotify(nsri, NetworkScan.SUCCESS, true);
+                deleteScanAndMayNotify(nsri, NetworkScan.SUCCESS, false);
             } else {
                 logEmptyResultOrException(ar);
                 if (ar.exception != null) {
                     CommandException.Error error =
                             ((CommandException) (ar.exception)).getCommandError();
-                    deleteScanAndMayNotify(nsri, commandExceptionErrorToScanError(error), true);
+                    deleteScanAndMayNotify(nsri, commandExceptionErrorToScanError(error), false);
                 } else {
                     Log.wtf(TAG, "EVENT_STOP_NETWORK_SCAN_DONE: ar.exception can not be null!");
                 }
             }
+            /* UNISOC: Bug 941774 Network scan results can be unregister in receiveResult.
+             * And in some special cases, we firstly execute stopScanDone, then receiveResult after a while.
+             * So it's early to unregister here.
+             * @{
             nsri.mPhone.mCi.unregisterForNetworkScanResult(mHandler);
+             /* @} */
         }
 
         // Interrupts the live scan is the scanId matches the mScanId of the mLiveRequestInfo.
@@ -529,8 +547,8 @@ public final class NetworkScanRequestTracker {
         //   3. The live scan is not requested by mobile network setting menu
         private synchronized boolean interruptLiveScan(NetworkScanRequestInfo nsri) {
             if (mLiveRequestInfo != null && mPendingRequestInfo == null
-                    && nsri.mUid == Process.PHONE_UID
-                            && mLiveRequestInfo.mUid != Process.PHONE_UID) {
+                    && nsri.mUid == Process.SYSTEM_UID
+                            && mLiveRequestInfo.mUid != Process.SYSTEM_UID) {
                 doInterruptScan(mLiveRequestInfo.mScanId);
                 mPendingRequestInfo = nsri;
                 notifyMessenger(mLiveRequestInfo, TelephonyScanManager.CALLBACK_SCAN_ERROR,
@@ -549,8 +567,18 @@ public final class NetworkScanRequestTracker {
         private synchronized boolean startNewScan(NetworkScanRequestInfo nsri) {
             if (mLiveRequestInfo == null) {
                 mLiveRequestInfo = nsri;
+                /* UNISOC: Bug1173649 @{ */
+                if (nsri == null || nsri.mScanId != mLiveRequestInfo.mScanId){
+                    return false;
+                }
+                /* @} */
                 nsri.mPhone.startNetworkScan(nsri.getRequest(),
                         mHandler.obtainMessage(EVENT_START_NETWORK_SCAN_DONE, nsri));
+                /* UNISOC: Bug1173649 Register for scan results immediately while network scan is started,
+                 * because network scan results indication is asynchronous, sometimes may reported earlier than scan done @{*/
+                nsri.mPhone.mCi.registerForNetworkScanResult(mHandler,
+                        EVENT_RECEIVE_NETWORK_SCAN_RESULT, nsri);
+                /* @} */
                 return true;
             }
             return false;
@@ -561,14 +589,20 @@ public final class NetworkScanRequestTracker {
         private synchronized void deleteScanAndMayNotify(NetworkScanRequestInfo nsri, int error,
                 boolean notify) {
             if (mLiveRequestInfo != null && nsri.mScanId == mLiveRequestInfo.mScanId) {
-                if (notify) {
-                    if (error == NetworkScan.SUCCESS) {
-                        notifyMessenger(nsri, TelephonyScanManager.CALLBACK_SCAN_COMPLETE, error,
-                                null);
-                    } else {
-                        notifyMessenger(nsri, TelephonyScanManager.CALLBACK_SCAN_ERROR, error,
-                                null);
-                    }
+                /* UNISOC: Bug 941774 App has the capability to disallow sending more than one scan requests.
+                 * So there is no need to remove mLiveRequestInfo if we don't want to notify TelephonyScanManager.
+                 * In addition, mLiveRequestInfo will be created every time a new scan request started.
+                 * @{ */
+                if (!notify && !nsri.getIsBinderDead()) {
+                    return;
+                }
+                /* @} */
+                if (error == NetworkScan.SUCCESS) {
+                    notifyMessenger(nsri, TelephonyScanManager.CALLBACK_SCAN_COMPLETE, error,
+                            null);
+                } else {
+                    notifyMessenger(nsri, TelephonyScanManager.CALLBACK_SCAN_ERROR, error,
+                            null);
                 }
                 mLiveRequestInfo = null;
                 if (mPendingRequestInfo != null) {

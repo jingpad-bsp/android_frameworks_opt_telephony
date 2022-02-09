@@ -280,6 +280,7 @@ public class DataConnection extends StateMachine {
     private final Map<ApnContext, ConnectionParams> mApnContexts = new ConcurrentHashMap<>();
     PendingIntent mReconnectIntent = null;
 
+    private boolean mIsNrConnectedInActivateState = false;
 
     // ***** Event codes for driving the state machine, package visible for Dcc
     static final int BASE = Protocol.BASE_DATA_CONNECTION;
@@ -308,6 +309,7 @@ public class DataConnection extends StateMachine {
     static final int EVENT_RESET = BASE + 24;
     static final int EVENT_REEVALUATE_RESTRICTED_STATE = BASE + 25;
     static final int EVENT_REEVALUATE_DATA_CONNECTION_PROPERTIES = BASE + 26;
+    static final int EVENT_SERVICE_STATE_CHANGED = BASE + 27;
 
     private static final int CMD_TO_STRING_COUNT =
             EVENT_REEVALUATE_DATA_CONNECTION_PROPERTIES - BASE + 1;
@@ -538,6 +540,17 @@ public class DataConnection extends StateMachine {
 
         if (apn == null || lp == null) return;
 
+        int mtu = PhoneConstants.UNSET_MTU;
+        int mtuForIpv6 = PhoneConstants.UNSET_MTU;
+
+        mtuForIpv6 = SubscriptionManager.getResourcesForSubId(
+                mPhone.getContext(), mPhone.getSubId())
+                .getInteger(com.android.internal.R.integer.mtu_config_for_IPV6);
+        if (mtuForIpv6 != PhoneConstants.UNSET_MTU) {
+            log ("MTU set by config resource to mtuForIpv6: " + mtuForIpv6);
+            lp.setIPv6Mtu(mtuForIpv6);
+        }
+
         if (lp.getMtu() != PhoneConstants.UNSET_MTU) {
             if (DBG) log("MTU set by call response to: " + lp.getMtu());
             return;
@@ -549,8 +562,9 @@ public class DataConnection extends StateMachine {
             return;
         }
 
-        int mtu = mPhone.getContext().getResources().getInteger(
-                com.android.internal.R.integer.config_mobile_mtu);
+        mtu = SubscriptionManager.getResourcesForSubId(
+                mPhone.getContext(), mPhone.getSubId())
+                .getInteger(com.android.internal.R.integer.config_mobile_mtu);
         if (mtu != PhoneConstants.UNSET_MTU) {
             lp.setMtu(mtu);
             if (DBG) log("MTU set by config resource to: " + mtu);
@@ -958,12 +972,22 @@ public class DataConnection extends StateMachine {
     private static final String TCP_BUFFER_SIZES_EHRPD = "131072,262144,1048576,4096,16384,524288";
     private static final String TCP_BUFFER_SIZES_HSDPA = "61167,367002,1101005,8738,52429,262114";
     private static final String TCP_BUFFER_SIZES_HSPA = "40778,244668,734003,16777,100663,301990";
+
+    /*SPRD: bug908973 for NS-IOT 5.1.4 A/B
+     *adjust tcp rmem for expanding tcp recv windows size to 4M bytes.
+     *SPRD: bug1387353 for CA NS-IOT 5.4.4
+     *adjust tcp wmem for expanding tcp send buffer max size to 3M bytes.
+     */
+    private static final String TCP_BUFFER_SIZES_LTE =
+            "2097152,4194304,8388608,262144,524288,3145728";
+    /*
     private static final String TCP_BUFFER_SIZES_LTE =
             "524288,1048576,2097152,262144,524288,1048576";
+    */
     private static final String TCP_BUFFER_SIZES_HSPAP =
             "122334,734003,2202010,32040,192239,576717";
     private static final String TCP_BUFFER_SIZES_NR =
-            "2097152,6291456,16777216,512000,2097152,8388608";
+            "4194304,16777216,67108864,512000,2097152,8388608";
 
     private void updateTcpBufferSizes(int rilRat) {
         String sizes = null;
@@ -1041,6 +1065,9 @@ public class DataConnection extends StateMachine {
                     break;
                 case ServiceState.RIL_RADIO_TECHNOLOGY_HSPAP:
                     sizes = TCP_BUFFER_SIZES_HSPAP;
+                    break;
+                case ServiceState.RIL_RADIO_TECHNOLOGY_NR:
+                    sizes = TCP_BUFFER_SIZES_NR;
                     break;
                 default:
                     // Leave empty - this will let ConnectivityService use the system default.
@@ -1186,6 +1213,7 @@ public class DataConnection extends StateMachine {
                         result.addCapability(NetworkCapabilities.NET_CAPABILITY_CBS);
                         result.addCapability(NetworkCapabilities.NET_CAPABILITY_IA);
                         result.addCapability(NetworkCapabilities.NET_CAPABILITY_DUN);
+                        result.addCapability(NetworkCapabilities.NET_CAPABILITY_XCAP);
                         break;
                     }
                     case PhoneConstants.APN_TYPE_DEFAULT: {
@@ -1228,6 +1256,10 @@ public class DataConnection extends StateMachine {
                         result.addCapability(NetworkCapabilities.NET_CAPABILITY_MCX);
                         break;
                     }
+                    case PhoneConstants.APN_TYPE_XCAP: {
+                        result.addCapability(NetworkCapabilities.NET_CAPABILITY_XCAP);
+                        break;
+                    }
                     default:
                 }
             }
@@ -1250,6 +1282,14 @@ public class DataConnection extends StateMachine {
             // don't use dun on restriction-overriden networks.
             result.removeCapability(NetworkCapabilities.NET_CAPABILITY_DUN);
         }
+
+        /* UNISOC: Bug 589397 Adjust network capability when mobile data is disabled @{ */
+        // If mobile data is disabled, then remove INTERNET cap
+        if (!mPhone.getDataEnabledSettings().isDataEnabled(ApnSetting.TYPE_DEFAULT) ||
+                (mPhone.getServiceState().getDataRoaming() && !mDct.getDataRoamingEnabled())) {
+            result.removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+        }
+        /* @} */
 
         int up = 14;
         int down = 14;
@@ -1623,17 +1663,31 @@ public class DataConnection extends StateMachine {
             mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.SUSPENDED, null,
                     mNetworkInfo.getExtraInfo());
         } else {
-            // check for voice call and concurrency issues
-            if (sst.isConcurrentVoiceAndDataAllowed() == false) {
-                final CallTracker ct = mPhone.getCallTracker();
-                if (ct.getState() != PhoneConstants.State.IDLE) {
-                    mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.SUSPENDED, null,
-                            mNetworkInfo.getExtraInfo());
-                    return;
+            Phone[] phones = PhoneFactory.getPhones();
+            Phone otherPhone = null;
+            for(Phone phone : phones) {
+                if (phone != mPhone) {
+                    otherPhone = phone;
                 }
             }
-            mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.CONNECTED, null,
-                    mNetworkInfo.getExtraInfo());
+            if (otherPhone != null && otherPhone.getState() != PhoneConstants.State.IDLE ) {
+                log("other phone is in call,suspend data connection on this phone");
+                mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.SUSPENDED, null,
+                        mNetworkInfo.getExtraInfo());
+                return;
+            } else {
+                // check for voice call and concurrency issues
+                if (sst.isConcurrentVoiceAndDataAllowed() == false) {
+                    /* UNISOC: bug599552 data icon shown under GSM when make emergency call @{ */
+                    if (mPhone.getState() != PhoneConstants.State.IDLE) {
+                        mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.SUSPENDED, null,
+                                mNetworkInfo.getExtraInfo());
+                        return;
+                    }
+                }
+                mNetworkInfo.setDetailedState(NetworkInfo.DetailedState.CONNECTED, null,
+                        mNetworkInfo.getExtraInfo());
+            }
         }
     }
 
@@ -1909,6 +1963,9 @@ public class DataConnection extends StateMachine {
             mPhone.getCallTracker().registerForVoiceCallEnded(getHandler(),
                     DataConnection.EVENT_DATA_CONNECTION_VOICE_CALL_ENDED, null);
 
+            mPhone.registerForServiceStateChanged(getHandler(),
+                    DataConnection.EVENT_SERVICE_STATE_CHANGED, null);
+
             // If the EVENT_CONNECT set the current max retry restore it here
             // if it didn't then this is effectively a NOP.
             mDcController.addActiveDcByCid(DataConnection.this);
@@ -1981,6 +2038,7 @@ public class DataConnection extends StateMachine {
                         getHandler(), DataConnection.EVENT_KEEPALIVE_STATUS, null);
                 mPhone.mCi.registerForLceInfo(
                         getHandler(), DataConnection.EVENT_LINK_CAPACITY_CHANGED, null);
+                mIsNrConnectedInActivateState = isNRConnected();
             }
             TelephonyMetrics.getInstance().writeRilDataCallEvent(mPhone.getPhoneId(),
                     mCid, mApnSetting.getApnTypeBitmask(), RilDataCall.State.CONNECTED);
@@ -1999,6 +2057,7 @@ public class DataConnection extends StateMachine {
             }
             mPhone.getCallTracker().unregisterForVoiceCallStarted(getHandler());
             mPhone.getCallTracker().unregisterForVoiceCallEnded(getHandler());
+            mPhone.unregisterForServiceStateChanged(getHandler());
 
             // If the data connection is being handover to other transport, we should not notify
             // disconnected to connectivity service.
@@ -2297,6 +2356,19 @@ public class DataConnection extends StateMachine {
                 case EVENT_REEVALUATE_DATA_CONNECTION_PROPERTIES: {
                     // Update other properties like link properties if needed in future.
                     updateScore();
+                    retVal = HANDLED;
+                    break;
+                }
+                case EVENT_SERVICE_STATE_CHANGED: {
+                    if (mIsNrConnectedInActivateState != isNRConnected()) {
+                        logd("DcActiveState NR state changed");
+                        updateTcpBufferSizes(mRilRat);
+                        if (mNetworkAgent != null) {
+                            mNetworkAgent.sendLinkProperties(mLinkProperties);
+                            mNetworkAgent.sendNetworkCapabilities(getNetworkCapabilities());
+                        }
+                        mIsNrConnectedInActivateState = isNRConnected();
+                    }
                     retVal = HANDLED;
                     break;
                 }
@@ -2770,6 +2842,18 @@ public class DataConnection extends StateMachine {
 
         return score;
     }
+
+    /* UNISOC:FEATURE_SUSPEND_DATA_WHEN_IN_CALL @{*/
+    public void sendSuspendMessage () {
+        log("send message:EVENT_DATA_CONNECTION_VOICE_CALL_STARTED to dataconnecition");
+        sendMessage(DataConnection.EVENT_DATA_CONNECTION_VOICE_CALL_STARTED);
+    }
+
+    public void sendResumeMessage () {
+        log("send EVENT_DATA_CONNECTION_VOICE_CALL_ENDED to dataconnecition");
+        sendMessage(DataConnection.EVENT_DATA_CONNECTION_VOICE_CALL_ENDED);
+    }
+    /* @} */
 
     /**
      * Dump the current state.

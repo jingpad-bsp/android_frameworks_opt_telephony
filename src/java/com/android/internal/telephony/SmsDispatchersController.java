@@ -102,6 +102,11 @@ public class SmsDispatchersController extends Handler {
     private final CommandsInterface mCi;
     private final Context mContext;
 
+    /* Unisoc: add for ctcc DM @{ */
+    private static final String CTCC_DM_SERVER_NUMBER = "10659401";
+    private static final int DM_REG_VER_CDMA = 2;
+    private static final int DM_REG_VER_IMS = 3;
+    /* @} */
     /** true if IMS is registered and sms is supported, false otherwise.*/
     private boolean mIms = false;
     private String mImsSmsFormat = SmsConstants.FORMAT_UNKNOWN;
@@ -570,16 +575,43 @@ public class SmsDispatchersController extends Handler {
      */
     protected void sendData(String callingPackage, String destAddr, String scAddr, int destPort,
             byte[] data, PendingIntent sentIntent, PendingIntent deliveryIntent, boolean isForVvm) {
+
+        if (destAddr.equals(CTCC_DM_SERVER_NUMBER)) {
+            //10659401 is ctcc dm register server, for self register
+            if (data.length > 0) {
+                int protocalVer = (int) data[0];
+                Rlog.d(TAG, "sendData: register myself to " + CTCC_DM_SERVER_NUMBER + " with " + protocalVer);
+                switch (protocalVer) {
+                    case DM_REG_VER_CDMA:  //is cdma
+                        mCdmaDispatcher.sendData(callingPackage,destAddr, scAddr, destPort, data, sentIntent, deliveryIntent, isForVvm);
+                        break;
+                    case DM_REG_VER_IMS: //is ims
         if (mImsSmsDispatcher.isAvailable()) {
             mImsSmsDispatcher.sendData(callingPackage, destAddr, scAddr, destPort, data, sentIntent,
                     deliveryIntent, isForVvm);
+                        } else {
+                            mGsmDispatcher.sendData(callingPackage, destAddr, scAddr, destPort, data, sentIntent, deliveryIntent, isForVvm);
+                        }
+                        break;
+                    default:
+                        Rlog.d(TAG, "sendData: unknown protocal version.");
+                        break;
+                }
+            } else {
+                Rlog.d(TAG, "sendData: data is null, not send.");
+            }
+        } else {
+            if (mImsSmsDispatcher.isAvailable()) {
+                mImsSmsDispatcher.sendData(callingPackage, destAddr, scAddr, destPort, data, sentIntent,
+                        deliveryIntent, isForVvm);
         } else if (isCdmaMo()) {
             mCdmaDispatcher.sendData(callingPackage, destAddr, scAddr, destPort, data, sentIntent,
                     deliveryIntent, isForVvm);
         } else {
             mGsmDispatcher.sendData(callingPackage, destAddr, scAddr, destPort, data, sentIntent,
                     deliveryIntent, isForVvm);
-        }
+           }
+    }
     }
 
     /**

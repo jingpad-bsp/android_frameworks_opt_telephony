@@ -81,15 +81,25 @@ public class IccProvider extends ContentProvider {
 
     private SubscriptionManager mSubscriptionManager;
 
+    //UNISOC: Add for bug1072750 , AndroidQ porting for USIM/SIM phonebook
+    private AbsIccProvider mIccProviderExImpl;
+
     @Override
     public boolean onCreate() {
         mSubscriptionManager = SubscriptionManager.from(getContext());
+        //UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook
+        mIccProviderExImpl = new IccProviderExImpl(getContext());
         return true;
     }
 
     @Override
     public Cursor query(Uri url, String[] projection, String selection,
             String[] selectionArgs, String sort) {
+        /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+        if (mIccProviderExImpl != null) {
+            return mIccProviderExImpl.query(url, projection, selection, selectionArgs, sort);
+        }
+        /* @} */
         if (DBG) log("query");
 
         switch (URL_MATCHER.match(url)) {
@@ -146,6 +156,11 @@ public class IccProvider extends ContentProvider {
 
     @Override
     public String getType(Uri url) {
+        /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+        if (mIccProviderExImpl != null) {
+            return mIccProviderExImpl.getType(url);
+        }
+        /* @} */
         switch (URL_MATCHER.match(url)) {
             case ADN:
             case ADN_SUB:
@@ -163,6 +178,11 @@ public class IccProvider extends ContentProvider {
 
     @Override
     public Uri insert(Uri url, ContentValues initialValues) {
+        /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+        if (mIccProviderExImpl != null) {
+            return mIccProviderExImpl.insert(url, initialValues);
+        }
+        /* @} */
         Uri resultUri;
         int efType;
         String pin2 = null;
@@ -260,6 +280,11 @@ public class IccProvider extends ContentProvider {
 
     @Override
     public int delete(Uri url, String where, String[] whereArgs) {
+        /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+        if (mIccProviderExImpl != null) {
+            return mIccProviderExImpl.delete(url, where, whereArgs);
+        }
+        /* @} */
         int efType;
         int subId;
 
@@ -341,6 +366,11 @@ public class IccProvider extends ContentProvider {
 
     @Override
     public int update(Uri url, ContentValues values, String where, String[] whereArgs) {
+        /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+        if (mIccProviderExImpl != null) {
+            return mIccProviderExImpl.update(url, values, where, whereArgs);
+        }
+        /* @} */
         String pin2 = null;
         int efType;
         int subId;

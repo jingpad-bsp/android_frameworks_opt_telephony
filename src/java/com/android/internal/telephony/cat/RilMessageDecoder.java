@@ -189,10 +189,17 @@ class RilMessageDecoder extends StateMachine {
                 decodingStarted = true;
             } catch (ResultException e) {
                 // send to Service for proper RIL communication.
-                CatLog.d(this, "decodeMessageParams: caught ResultException e=" + e);
+                /*UNISOC: Feature bug for Stk Feature @{*/
+                CatLog.d(this, "decodeMessageParams: caught ResultException e = " + e
+                       + " CommandDetails = " + ComprehensionTlv.getCommandDetails());
                 mCurrentRilMessage.mResCode = e.result();
+                if (ComprehensionTlv.getCommandDetails() != null) {
+                    mCurrentRilMessage.mData = ComprehensionTlv.getCommandDetails();
+                }
                 sendCmdForExecution(mCurrentRilMessage);
                 decodingStarted = false;
+                ComprehensionTlv.setCommandDetails(null);
+                /*UNISOC: @}*/
             }
             break;
         default:

@@ -123,6 +123,8 @@ public class CommandException extends RuntimeException {
         OEM_ERROR_23,
         OEM_ERROR_24,
         OEM_ERROR_25,
+        //UNISOC: Add error for UiccCardApp dispose
+        UICC_CARD_APPLICATION_DISPOSED,
     }
 
     @UnsupportedAppUsage

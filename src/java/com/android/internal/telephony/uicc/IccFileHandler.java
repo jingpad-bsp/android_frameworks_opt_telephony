@@ -19,6 +19,7 @@ package com.android.internal.telephony.uicc;
 import android.annotation.UnsupportedAppUsage;
 import android.os.*;
 
+import com.android.internal.telephony.AbsIccFileHandler;
 import com.android.internal.telephony.CommandsInterface;
 
 import java.util.ArrayList;
@@ -26,7 +27,7 @@ import java.util.ArrayList;
 /**
  * {@hide}
  */
-public abstract class IccFileHandler extends Handler implements IccConstants {
+public abstract class IccFileHandler extends AbsIccFileHandler implements IccConstants {
     private static final boolean VDBG = false;
 
     //from TS 11.11 9.1 or elsewhere

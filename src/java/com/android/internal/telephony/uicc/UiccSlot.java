@@ -130,6 +130,11 @@ public class UiccSlot extends Handler {
                     mUiccCard.update(mContext, mCi, ics);
                 }
             }
+            //UNISOC:When IccId has been fetched,go to create SubscriptionInfo
+            if (mUiccCard != null && !TextUtils.isEmpty(mIccId)) {
+                UiccController.updateInternalIccState(mContext,IccCardConstants.State.ICCID_LOADED,
+                        null, mPhoneId);
+            }
             mLastRadioState = radioState;
         }
     }

@@ -25,7 +25,7 @@ import com.android.internal.telephony.uicc.UiccCardApplication;
  * {@hide}
  * This class should be used to access files in USIM ADF
  */
-public final class UsimFileHandler extends IccFileHandler implements IccConstants {
+public class UsimFileHandler extends IccFileHandler implements IccConstants {
     static final String LOG_TAG = "UsimFH";
 
     public UsimFileHandler(UiccCardApplication app, String aid, CommandsInterface ci) {

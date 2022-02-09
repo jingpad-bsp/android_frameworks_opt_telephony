@@ -21,7 +21,7 @@ import android.graphics.Bitmap;
 import android.os.Handler;
 import android.os.Message;
 import android.text.TextUtils;
-
+import android.content.res.Resources;
 import com.android.internal.telephony.GsmAlphabet;
 import com.android.internal.telephony.uicc.IccFileHandler;
 
@@ -39,6 +39,8 @@ import static com.android.internal.telephony.cat.CatCmdMessage
                    .SetupEventListConstants.LANGUAGE_SELECTION_EVENT;
 import static com.android.internal.telephony.cat.CatCmdMessage
                    .SetupEventListConstants.USER_ACTIVITY_EVENT;
+import static com.android.internal.telephony.cat.CatCmdMessage
+                   .SetupEventListConstants.LOCATION_STATUS_EVENT;
 /**
  * Factory class, used for decoding raw byte arrays, received from baseband,
  * into a CommandParams object.
@@ -62,6 +64,17 @@ class CommandParamsFactory extends Handler {
     static final int LOAD_NO_ICON           = 0;
     static final int LOAD_SINGLE_ICON       = 1;
     static final int LOAD_MULTI_ICONS       = 2;
+
+    /*UNISOC: Feature for REFRESH function @{ */
+    static final int REFRESH_NAA_INIT_AND_FULL_FILE_CHANGE  = 0x00;
+    static final int REFRESH_FILE_CHANGE                    = 0x01;
+    static final int REFRESH_NAA_INIT_AND_FILE_CHANGE       = 0x02;
+    static final int REFRESH_NAA_INIT                       = 0x03;
+    static final int REFRESH_UICC_RESET                     = 0x04;
+    static final int REFRESH_NAA_APP_RESET                  = 0x05;
+    static final int REFRESH_NAA_SESSION_RESET              = 0x06;
+    static final int REFRESH_UICC_PLMN_CHANGE               = 0x07;
+    /*UNISOC: @}*/
 
     // Command Qualifier values for PLI command
     static final int DTTZ_SETTING                           = 0x03;
@@ -182,9 +195,14 @@ class CommandParamsFactory extends Handler {
              case GET_INPUT:
                  cmdPending = processGetInput(cmdDet, ctlvs);
                  break;
+             /*UNISOC: Feature Feature for REFRESH function @{*/
+             case REFRESH:
+                 cmdPending = processRefresh(cmdDet, ctlvs);
+                 break;
+            /*UNISOC: @}*/
              case SEND_DTMF:
              case SEND_SMS:
-             case REFRESH:
+             //case REFRESH:
              case RUN_AT:
              case SEND_SS:
              case SEND_USSD:
@@ -619,7 +637,17 @@ class CommandParamsFactory extends Handler {
         while (true) {
             ctlv = searchForNextTag(ComprehensionTlvTag.ITEM, iter);
             if (ctlv != null) {
-                menu.items.add(ValueParser.retrieveItem(ctlv));
+                //menu.items.add(ValueParser.retrieveItem(ctlv));
+                /*UNISOC: BUG Don't to add the NULL item to menu for SELECT_ITEM only @{ */
+                if (cmdType == AppInterface.CommandType.SELECT_ITEM) {
+                    Item item = ValueParser.retrieveItem(ctlv);
+                    if (item != null) {
+                        menu.items.add(item);
+                    }
+                } else {
+                    menu.items.add(ValueParser.retrieveItem(ctlv));
+                }
+                /*UNISOC: @}*/
             } else {
                 break;
             }
@@ -709,8 +737,15 @@ class CommandParamsFactory extends Handler {
 
         ComprehensionTlv ctlv = searchForTag(ComprehensionTlvTag.ALPHA_ID,
                 ctlvs);
-        textMsg.text = ValueParser.retrieveAlphaId(ctlv);
-
+        //textMsg.text = ValueParser.retrieveAlphaId(ctlv);
+        /*UNISOC: Feature bug for Stk Feature @{*/
+        if (ctlv != null) {
+            textMsg.text = ValueParser.retrieveAlphaId(ctlv);
+        } else {
+            textMsg.text = null;
+            CatLog.d(this, "alpha id null, set text to null");
+        }
+        /* @} */
         ctlv = searchForTag(ComprehensionTlvTag.ICON_ID, ctlvs);
         if (ctlv != null) {
             iconId = ValueParser.retrieveIconId(ctlv);
@@ -764,6 +799,9 @@ class CommandParamsFactory extends Handler {
                         case LANGUAGE_SELECTION_EVENT:
                         case BROWSER_TERMINATION_EVENT:
                         case BROWSING_STATUS_EVENT:
+                        /*UNISOC: Feature for Envelop Command @{*/
+                        case LOCATION_STATUS_EVENT:
+                        /*UNISOC: @}*/
                             eventList[i] = eventValue;
                             i++;
                             break;
@@ -819,7 +857,12 @@ class CommandParamsFactory extends Handler {
         // parse alpha identifier.
         ctlv = searchForTag(ComprehensionTlvTag.ALPHA_ID, ctlvs);
         confirmMsg.text = ValueParser.retrieveAlphaId(ctlv);
-
+        /*UNISOC: Feature bug for Stk Feature @{*/
+        if(confirmMsg.text == null){
+            confirmMsg.text = Resources.getSystem().getString(
+                    com.android.internal.R.string.launchBrowserDefault);
+        }
+        /*UNISOC: @}*/
         // parse icon identifier
         ctlv = searchForTag(ComprehensionTlvTag.ICON_ID, ctlvs);
         if (ctlv != null) {
@@ -949,7 +992,12 @@ class CommandParamsFactory extends Handler {
         // get confirmation message string.
         ctlv = searchForNextTag(ComprehensionTlvTag.ALPHA_ID, iter);
         confirmMsg.text = ValueParser.retrieveAlphaId(ctlv);
-
+        /*UNISOC: Feature bug for Stk Feature @{*/
+        if(confirmMsg.text == null){
+            confirmMsg.text = Resources.getSystem().getString(
+                    com.android.internal.R.string.SetupCallDefault);
+        }
+        /*UNISOC: @}*/
         ctlv = searchForTag(ComprehensionTlvTag.ICON_ID, ctlvs);
         if (ctlv != null) {
             confirmIconId = ValueParser.retrieveIconId(ctlv);
@@ -1113,4 +1161,49 @@ class CommandParamsFactory extends Handler {
         mCaller = null;
         sInstance = null;
     }
+
+    /*UNISOC: Feature porting for REFRESH function @{*/
+    /**
+     * Processes REFRESH proactive command from the SIM card.
+     *
+     * @param cmdDet Command Details container object.
+     * @param ctlvs List of ComprehensionTlv objects following Command Details
+     *        object and Device Identities object within the proactive command
+     */
+    private boolean processRefresh(CommandDetails cmdDet,
+                                   List<ComprehensionTlv> ctlvs) throws ResultException {
+
+        CatLog.d(this, "process Refresh");
+        TextMessage textMsg = new TextMessage();
+
+        ComprehensionTlv ctlv = searchForTag(ComprehensionTlvTag.ALPHA_ID,
+                ctlvs);
+        if (ctlv != null) {
+            textMsg.text = ValueParser.retrieveAlphaId(ctlv);
+        } else {
+            CatLog.d(this, "alpha id null, set text to null");
+            textMsg.text = null;
+        }
+
+        // REFRESH proactive command is rerouted by the baseband and handled by
+        // the telephony layer. IDLE TEXT should be removed for a REFRESH command
+        // with "initialization" or "reset"
+        switch (cmdDet.commandQualifier) {
+            case REFRESH_NAA_INIT_AND_FULL_FILE_CHANGE:
+            case REFRESH_NAA_INIT_AND_FILE_CHANGE:
+            case REFRESH_NAA_INIT:
+            case REFRESH_UICC_RESET:
+            case REFRESH_FILE_CHANGE:
+            case REFRESH_NAA_APP_RESET:
+            case REFRESH_NAA_SESSION_RESET:
+            case REFRESH_UICC_PLMN_CHANGE:
+                mCmdParams = new DisplayTextParams(cmdDet, textMsg);
+                break;
+            default:
+                CatLog.d(this, "process Refresh: wrong commandQualifier");
+                break;
+        }
+        return false;
+    }
+    /* @} */
 }

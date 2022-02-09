@@ -107,6 +107,8 @@ public class ProxyController {
     @UnsupportedAppUsage
     private int[] mOldRadioAccessFamily;
 
+    // UNISOC: [1512806] Add variable for holding new request.
+    private RadioAccessFamily[] mHoldingRequestRafs;
 
     //***** Class Methods
     public static ProxyController getInstance(Context context, Phone[] phone,
@@ -135,6 +137,9 @@ public class ProxyController {
         RcsMessageStoreController.init(context);
 
         mUiccPhoneBookController = new UiccPhoneBookController(mPhones);
+        //UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook
+        new UiccPhoneBookControllerEx(mPhones);
+        new UiccSmsControllerEx(mPhones);
         mPhoneSubInfoController = new PhoneSubInfoController(mContext, mPhones);
         mSmsController = new SmsController(mContext);
         mSetRadioAccessFamilyStatus = new int[mPhones.length];
@@ -214,10 +219,16 @@ public class ProxyController {
         // Check if there is any ongoing transaction and throw an exception if there
         // is one as this is a programming error.
         synchronized (mSetRadioAccessFamilyStatus) {
+            mHoldingRequestRafs = null;
             for (int i = 0; i < mPhones.length; i++) {
                 if (mSetRadioAccessFamilyStatus[i] != SET_RC_STATUS_IDLE) {
+                    /*
+                     * UNISOC: [bug1512806] Hold the new request and send it after the previous one is
+                     * done rather than directly ignored. @{
+                     */
                     // TODO: The right behaviour is to cancel previous request and send this.
                     loge("setRadioCapability: Phone[" + i + "] is not idle. Rejecting request.");
+                    mHoldingRequestRafs = rafs;
                     return false;
                 }
             }
@@ -566,6 +577,17 @@ public class ProxyController {
 
             // Reinitialize
             clearTransaction();
+            /*
+             * UNISOC: [bug1512806] Hold the new request and send it after the previous one is done
+             * rather than directly ignored. @{
+             */
+            synchronized (mSetRadioAccessFamilyStatus) {
+                if (mHoldingRequestRafs != null) {
+                    logd("Send the holding request.");
+                    setRadioCapability(mHoldingRequestRafs);
+                }
+            }
+            /* @} */
         } else {
             intent = new Intent(TelephonyIntents.ACTION_SET_RADIO_CAPABILITY_FAILED);
 

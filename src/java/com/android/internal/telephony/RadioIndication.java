@@ -67,6 +67,8 @@ import static com.android.internal.telephony.RILConstants.RIL_UNSOL_UICC_SUBSCRI
 import static com.android.internal.telephony.RILConstants.RIL_UNSOL_VOICE_RADIO_TECH_CHANGED;
 import static com.android.internal.telephony.RILConstants.RIL_UNSOl_CDMA_PRL_CHANGED;
 
+import android.app.ActivityManager;
+import android.app.LowmemoryUtils;
 import android.hardware.radio.V1_0.CdmaCallWaiting;
 import android.hardware.radio.V1_0.CdmaInformationRecord;
 import android.hardware.radio.V1_0.CdmaLineControlInfoRecord;
@@ -112,6 +114,9 @@ import java.util.List;
 public class RadioIndication extends IRadioIndication.Stub {
     RIL mRil;
 
+    // UNISOC: Kill-stop mechanism
+    Thread mThread;
+
     RadioIndication(RIL ril) {
         mRil = ril;
     }
@@ -137,6 +142,9 @@ public class RadioIndication extends IRadioIndication.Stub {
         mRil.processIndication(indicationType);
 
         if (RIL.RILJ_LOGD) mRil.unsljLog(RIL_UNSOL_RESPONSE_CALL_STATE_CHANGED);
+
+        /** UNISOC: kill-stop mechanism BEGIN */
+        sendKillStopToAms();
 
         mRil.mCallStateRegistrants.notifyRegistrants();
     }
@@ -362,10 +370,14 @@ public class RadioIndication extends IRadioIndication.Stub {
         notification.number = suppSvcNotification.number;
 
         if (RIL.RILJ_LOGD) mRil.unsljLogRet(RIL_UNSOL_SUPP_SVC_NOTIFICATION, notification);
-
-        if (mRil.mSsnRegistrant != null) {
-            mRil.mSsnRegistrant.notifyRegistrant(new AsyncResult (null, notification, null));
-        }
+        /* UNISOC: add for IMS
+         * @Org:
+         * if (mRil.mSsnRegistrant != null) {
+         *     mRil.mSsnRegistrant.notifyRegistrant(new AsyncResult (null, notification, null));
+         * }
+         *{ */
+        mRil.mSsnRegistrants.notifyRegistrants(new AsyncResult(null, notification, null));
+        /* @} */
     }
 
     public void stkSessionEnd(int indicationType) {
@@ -1082,5 +1094,32 @@ public class RadioIndication extends IRadioIndication.Stub {
         NetworkScanResult nsr = new NetworkScanResult(result.status, result.error, cellInfos);
         if (RIL.RILJ_LOGD) mRil.unsljLogRet(RIL_UNSOL_NETWORK_SCAN_RESULT, nsr);
         mRil.mRilNetworkScanResultRegistrants.notifyRegistrants(new AsyncResult(null, nsr, null));
+    }
+
+    /** UNISOC: kill-stop mechanism BEGIN*/
+    public void sendKillStopToAms() {
+        if (mThread == null) {
+            mThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        ActivityManager activityManager = mRil.mContext.getSystemService(
+                                ActivityManager.class);
+                        if (activityManager != null && activityManager.isLowRamDevice()) {
+                            if (RIL.RILJ_LOGD) mRil.riljLog("sendKillStopToAms start");
+                            LowmemoryUtils.killStopFrontApp(LowmemoryUtils.KILL_STOP_FRONT_APP);
+                            if (RIL.RILJ_LOGD) mRil.riljLog("sendKillStopToAms end");
+                            Thread.sleep(3000);
+                        } else {
+                            if (RIL.RILJ_LOGD) mRil.riljLog("sendKillStopToAms, is not lowMemory.");
+                        }
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                    mThread = null;
+                }
+            });
+            mThread.start();
+        }
     }
 }

@@ -33,9 +33,11 @@ import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.ServiceConnection;
 import android.content.res.Resources;
 import android.hardware.radio.V1_0.CellInfoType;
 import android.net.NetworkCapabilities;
@@ -43,6 +45,7 @@ import android.os.AsyncResult;
 import android.os.BaseBundle;
 import android.os.Build;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Message;
 import android.os.PersistableBundle;
 import android.os.Registrant;
@@ -61,6 +64,7 @@ import android.telephony.CellIdentity;
 import android.telephony.CellIdentityCdma;
 import android.telephony.CellIdentityGsm;
 import android.telephony.CellIdentityLte;
+import android.telephony.CellIdentityNr;
 import android.telephony.CellIdentityTdscdma;
 import android.telephony.CellIdentityWcdma;
 import android.telephony.CellInfo;
@@ -97,6 +101,7 @@ import com.android.internal.telephony.dataconnection.DataConnection;
 import com.android.internal.telephony.dataconnection.DcTracker;
 import com.android.internal.telephony.dataconnection.TransportManager;
 import com.android.internal.telephony.metrics.TelephonyMetrics;
+import com.android.internal.telephony.TeleUtils;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppState;
 import com.android.internal.telephony.uicc.IccCardStatus.CardState;
 import com.android.internal.telephony.uicc.IccRecords;
@@ -107,8 +112,12 @@ import com.android.internal.telephony.uicc.UiccCardApplication;
 import com.android.internal.telephony.uicc.UiccController;
 import com.android.internal.telephony.uicc.UiccProfile;
 import com.android.internal.telephony.util.NotificationChannelController;
+import com.android.internal.telephony.imsphone.ImsPhoneCallTracker;
+import com.android.internal.telephony.imsphone.ImsPhone;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.IndentingPrintWriter;
+import com.android.sprd.telephony.RadioInteractorCallbackListener;
+import com.android.sprd.telephony.RadioInteractor;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
@@ -169,6 +178,8 @@ public class ServiceStateTracker extends Handler {
     private long mLastCellInfoReqTime;
     private List<CellInfo> mLastCellInfoList = null;
     private List<PhysicalChannelConfig> mLastPhysicalChannelConfigList = null;
+    private SignalConnectedStatus mLastSignalConnectedStatus = null;
+    private int mNrCfgValue = 0;
 
     @UnsupportedAppUsage
     private SignalStrength mSignalStrength;
@@ -270,6 +281,9 @@ public class ServiceStateTracker extends Handler {
     protected static final int EVENT_PHYSICAL_CHANNEL_CONFIG           = 55;
     protected static final int EVENT_CELL_LOCATION_RESPONSE            = 56;
     protected static final int EVENT_CARRIER_CONFIG_CHANGED            = 57;
+    protected static final int EVENT_SIGNAL_CONNECTION_STATUS          = 58;
+    protected static final int EVENT_SMART_NR_CHANGED_EVENT            = 59;
+    protected static final int EVENT_NR_CFG_INFO_EVENT                 = 60;
 
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(prefix = {"CARRIER_NAME_DISPLAY_BITMASK"},
@@ -506,6 +520,11 @@ public class ServiceStateTracker extends Handler {
                 }
                 return;
             }
+            //UNISOC:Modify the Bug1029213
+            if (intent.getAction().equals(Intent.ACTION_LOCALE_CHANGED)) {
+                // update emergency string whenever locale changed
+                updateSpnDisplay();
+            }
 
             // TODO: Remove this weird check left over from CDMA/GSM service state tracker merge.
             if (!mPhone.isPhoneTypeGsm()) {
@@ -513,10 +532,11 @@ public class ServiceStateTracker extends Handler {
                 return;
             }
 
-            if (intent.getAction().equals(Intent.ACTION_LOCALE_CHANGED)) {
+            /*if (intent.getAction().equals(Intent.ACTION_LOCALE_CHANGED)) {
                 // update emergency string whenever locale changed
                 updateSpnDisplay();
-            } else if (intent.getAction().equals(ACTION_RADIO_OFF)) {
+            } else*/
+            if (intent.getAction().equals(ACTION_RADIO_OFF)) {
                 mAlarmSwitch = false;
                 powerOffRadioSafely();
             }
@@ -568,6 +588,8 @@ public class ServiceStateTracker extends Handler {
                                    // while calculating signal strength level.
     private final Object mLteRsrpBoostLock = new Object();
     private static final int INVALID_LTE_EARFCN = -1;
+    private RadioInteractorCallbackListener mRadioInteractorCallbackListener;
+    private RadioInteractor mRadioInteractor;
 
     public ServiceStateTracker(GsmCdmaPhone phone, CommandsInterface ci) {
         mNitzState = TelephonyComponentFactory.getInstance()
@@ -576,6 +598,11 @@ public class ServiceStateTracker extends Handler {
         mPhone = phone;
         mCi = ci;
 
+        /*UNISOC: For 5G Featrue development @{*/
+        mRadioInteractorCallbackListener = getRadioInteractorCallbackListener(getPhoneId());
+        mRadioInteractor = new RadioInteractor(mPhone.getContext());
+        setForRadiointeractorListener();
+        /* @} */
         mCdnr = new CarrierDisplayNameResolver(mPhone);
 
         mEriManager = TelephonyComponentFactory.getInstance().inject(EriManager.class.getName())
@@ -779,6 +806,10 @@ public class ServiceStateTracker extends Handler {
             mCSST.dispose();
             mCSST = null;
         }
+        /*UNISOC: For 5G Featrue development @{*/
+        mRadioInteractor.listen(mRadioInteractorCallbackListener,
+                RadioInteractorCallbackListener.LISTEN_NONE);
+        /* @} */
     }
 
     @UnsupportedAppUsage
@@ -1281,6 +1312,9 @@ public class ServiceStateTracker extends Handler {
 
             case EVENT_SIM_RECORDS_LOADED:
                 log("EVENT_SIM_RECORDS_LOADED: what=" + msg.what);
+                /*UNISOC: Feature bug 1098293  @{ */
+                mPhone.updateVoiceMail();
+                /*UNISOC @} */
                 updatePhoneObject();
                 updateOtaspState();
                 if (mPhone.isPhoneTypeGsm()) {
@@ -1354,20 +1388,6 @@ public class ServiceStateTracker extends Handler {
                     ar = (AsyncResult) msg.obj;
 
                     onRestrictedStateChanged(ar);
-                }
-                break;
-
-            case EVENT_ALL_DATA_DISCONNECTED:
-                int dds = SubscriptionManager.getDefaultDataSubscriptionId();
-                ProxyController.getInstance().unregisterForAllDataDisconnected(dds, this);
-                synchronized(this) {
-                    if (mPendingRadioPowerOffAfterDataOff) {
-                        if (DBG) log("EVENT_ALL_DATA_DISCONNECTED, turn radio off now.");
-                        hangupAndPowerOff();
-                        mPendingRadioPowerOffAfterDataOff = false;
-                    } else {
-                        log("EVENT_ALL_DATA_DISCONNECTED is stale");
-                    }
                 }
                 break;
 
@@ -1570,6 +1590,49 @@ public class ServiceStateTracker extends Handler {
                 onCarrierConfigChanged();
                 break;
 
+            case EVENT_SIGNAL_CONNECTION_STATUS:
+                log("EVENT_SIGNAL_CONNECTION_STATUS");
+                ar = (AsyncResult) msg.obj;
+                if (ar.exception == null) {
+                    SignalConnectedStatus signalConnectedStatus = (SignalConnectedStatus)ar.result;
+                    mLastSignalConnectedStatus = signalConnectedStatus;
+                    boolean hasChanged =
+                            updateSiganlConnectedStatus(mNrCfgValue, signalConnectedStatus, mSS.getNetworkRegistrationInfo(
+                                    NetworkRegistrationInfo.DOMAIN_PS, AccessNetworkConstants.TRANSPORT_TYPE_WWAN));
+                    if (hasChanged) {
+                        mPhone.notifyServiceStateChanged(mSS);
+                    }
+                }
+                break;
+
+            case EVENT_SMART_NR_CHANGED_EVENT:
+                log("EVENT_SMART_NR_CHANGED_EVENT");
+                boolean changed =
+                        updateSiganlConnectedStatus(mNrCfgValue, mLastSignalConnectedStatus, mSS.getNetworkRegistrationInfo(
+                                NetworkRegistrationInfo.DOMAIN_PS, AccessNetworkConstants.TRANSPORT_TYPE_WWAN));
+                if (changed) {
+                    mPhone.notifyServiceStateChanged(mSS);
+                }
+                break;
+
+            case EVENT_NR_CFG_INFO_EVENT:
+                log("EVENT_NR_CFG_INFO_EVENT");
+                ar = (AsyncResult) msg.obj;
+                if (ar.exception == null) {
+                    int resultArray[] = (int[])ar.result;
+                    int type = resultArray[0];
+                    int value = resultArray[1];
+                    log("EVENT_NR_CFG_INFO_EVENT type = " + type + " value = " + value);
+                    mNrCfgValue = value;
+                    boolean hasChanged =
+                            updateSiganlConnectedStatus(mNrCfgValue, mLastSignalConnectedStatus, mSS.getNetworkRegistrationInfo(
+                                    NetworkRegistrationInfo.DOMAIN_PS, AccessNetworkConstants.TRANSPORT_TYPE_WWAN));
+                    if (hasChanged) {
+                        mPhone.notifyServiceStateChanged(mSS);
+                    }
+                }
+                break;
+
             default:
                 log("Unhandled message with number: " + msg.what);
                 break;
@@ -1766,9 +1829,15 @@ public class ServiceStateTracker extends Handler {
             }
 
             if (err == CommandException.Error.RADIO_NOT_AVAILABLE) {
-                // Radio has crashed or turned off
-                cancelPollState();
-                return;
+                loge("handlePollStateResult exception " + err);
+                if (mCi.getRadioState() == TelephonyManager.RADIO_POWER_OFF
+                        && mSS.getState() != ServiceState.STATE_POWER_OFF) {
+                    loge("If radioState is off but service State not off, not return instead of notify servce state changed");
+                } else {
+                    loge("cancelPollState and return ");
+                    cancelPollState();
+                    return;
+                }
             }
 
             if (err != CommandException.Error.OP_NOT_ALLOWED_BEFORE_REG_NW) {
@@ -1997,15 +2066,17 @@ public class ServiceStateTracker extends Handler {
         NetworkRegistrationInfo wwanPsRegState = serviceState.getNetworkRegistrationInfo(
                 NetworkRegistrationInfo.DOMAIN_PS, AccessNetworkConstants.TRANSPORT_TYPE_WWAN);
 
+        /*UNISOC: 1140298, Solution defect caused by the unrealized logic of IWLAN handover*/
         // Check if any APN is preferred on IWLAN.
-        boolean isIwlanPreferred = mTransportManager.isAnyApnPreferredOnIwlan();
-        serviceState.setIwlanPreferred(isIwlanPreferred);
+        //boolean isIwlanPreferred = mTransportManager.isAnyApnPreferredOnIwlan();
+        //serviceState.setIwlanPreferred(isIwlanPreferred);
+        /*UNISOC: 1140298*/
         if (wlanPsRegState != null
                 && wlanPsRegState.getAccessNetworkTechnology()
                 == TelephonyManager.NETWORK_TYPE_IWLAN
                 && wlanPsRegState.getRegistrationState()
                 == NetworkRegistrationInfo.REGISTRATION_STATE_HOME
-                && isIwlanPreferred) {
+                /* && isIwlanPreferred */) {
             serviceState.setDataRegState(ServiceState.STATE_IN_SERVICE);
         } else if (wwanPsRegState != null) {
             // If the device is not camped on IWLAN, then we use cellular PS registration state
@@ -2127,8 +2198,10 @@ public class ServiceStateTracker extends Handler {
                 if (serviceState == ServiceState.STATE_OUT_OF_SERVICE) {
                     mLastPhysicalChannelConfigList = null;
                     updateNrFrequencyRangeFromPhysicalChannelConfigs(null, mNewSS);
+                    mNrCfgValue = 0;
                 }
                 updateNrStateFromPhysicalChannelConfigs(mLastPhysicalChannelConfigList, mNewSS);
+                updateSiganlConnectedStatus(mNrCfgValue, mLastSignalConnectedStatus, networkRegState);
                 setPhyCellInfoFromCellIdentity(mNewSS, networkRegState.getCellIdentity());
 
                 if (mPhone.isPhoneTypeGsm()) {
@@ -2160,6 +2233,10 @@ public class ServiceStateTracker extends Handler {
                     // voice roaming state in done while handling EVENT_POLL_STATE_REGISTRATION_CDMA
                     boolean isDataRoaming = regCodeIsRoaming(registrationState);
                     mNewSS.setDataRoaming(isDataRoaming);
+                }
+                mNewCellIdentity = networkRegState.getCellIdentity();
+                if (DBG) {
+                    log("handlePollStateResultMessage: PS cellular. " + networkRegState);
                 }
 
                 updateServiceStateLteEarfcnBoost(mNewSS,
@@ -2260,18 +2337,22 @@ public class ServiceStateTracker extends Handler {
      *
      * @returns the cell ID (unique within a PLMN for a given tech) or -1 if invalid
      */
-    private static int getCidFromCellIdentity(CellIdentity id) {
+    private static long getCidFromCellIdentity(CellIdentity id) {
         if (id == null) return -1;
-        int cid = -1;
+        long cid = -1;
         switch(id.getType()) {
             case CellInfo.TYPE_GSM: cid = ((CellIdentityGsm) id).getCid(); break;
             case CellInfo.TYPE_WCDMA: cid = ((CellIdentityWcdma) id).getCid(); break;
             case CellInfo.TYPE_TDSCDMA: cid = ((CellIdentityTdscdma) id).getCid(); break;
             case CellInfo.TYPE_LTE: cid = ((CellIdentityLte) id).getCi(); break;
+            case CellInfo.TYPE_NR: cid = ((CellIdentityNr) id).getNci(); break;
             default: break;
         }
         // If the CID is unreported
-        if (cid == Integer.MAX_VALUE) cid = -1;
+        if (cid == (id.getType() == CellInfo.TYPE_NR
+                ? CellInfo.UNAVAILABLE_LONG : CellInfo.UNAVAILABLE)) {
+            cid = -1;
+        }
 
         return cid;
     }
@@ -2598,6 +2679,13 @@ public class ServiceStateTracker extends Handler {
             wfcFlightSpnFormat = wfcSpnFormats[flightModeIdx];
         }
 
+        //UNISOC:Translation service provider name
+        TelephonyManager tm = (TelephonyManager) mPhone.getContext().getSystemService(
+                Context.TELEPHONY_SERVICE);
+        String networkOperatorName = TeleUtils.translateOperatorName(mSS.getOperatorNumeric()
+                ,mSS.getOperatorAlpha());
+        tm.setNetworkOperatorNameForPhone(mPhone.getPhoneId(), networkOperatorName);
+
         if (mPhone.isPhoneTypeGsm()) {
             // The values of plmn/showPlmn change in different scenarios.
             // 1) No service but emergency call allowed -> expected
@@ -2643,6 +2731,8 @@ public class ServiceStateTracker extends Handler {
             } else if (combinedRegState == ServiceState.STATE_IN_SERVICE) {
                 // In either home or roaming service
                 plmn = mSS.getOperatorAlpha();
+                //UNISOC:Translation service provider name
+                plmn = TeleUtils.translateOperatorName(mSS.getOperatorNumeric(),mSS.getOperatorAlpha());
                 showPlmn = !TextUtils.isEmpty(plmn) &&
                         ((rule & CARRIER_NAME_DISPLAY_BITMASK_SHOW_PLMN)
                                 == CARRIER_NAME_DISPLAY_BITMASK_SHOW_PLMN);
@@ -2661,6 +2751,9 @@ public class ServiceStateTracker extends Handler {
             //    EXTRA_SPN = spn
             //    EXTRA_DATA_SPN = dataSpn
             spn = getServiceProviderName();
+            //UNISOC:Translation service provider name
+            String simNumeric = (mIccRecords != null) ? mIccRecords.getOperatorNumeric() : "";
+            spn = TeleUtils.translateOperatorName(simNumeric, spn);
             dataSpn = spn;
             showSpn = !noService && !TextUtils.isEmpty(spn)
                     && ((rule & CARRIER_NAME_DISPLAY_BITMASK_SHOW_SPN)
@@ -2701,6 +2794,8 @@ public class ServiceStateTracker extends Handler {
 
             // mOperatorAlpha contains the ERI text
             plmn = mSS.getOperatorAlpha();
+            //UNISOC:Translation service provider name
+            plmn = TeleUtils.translateOperatorName(mSS.getOperatorNumeric(),mSS.getOperatorAlpha());
             if (DBG) log("updateSpnDisplay: cdma rawPlmn = " + plmn);
 
             showPlmn = plmn != null;
@@ -2726,6 +2821,17 @@ public class ServiceStateTracker extends Handler {
                 }
             }
 
+        }
+
+        // UNISOC Add: Operator Customize Wifi Calling Feature
+        if(!TextUtils.isEmpty(plmn) && plmn.equals(Resources.getSystem().
+                getText(com.android.internal.R.string.customize_operator_name_string).toString())
+                && mPhone.getImsPhone() != null
+                && mPhone.getImsPhone().isWifiCallingEnabled()) {
+            plmn = Resources.getSystem().
+                    getText(com.android.internal.R.string.customize_wfc_operator_name_string).toString();
+            showSpn = false;
+            showPlmn = true;
         }
 
         notifySpnDisplayUpdate(new CarrierDisplayNameData.Builder()
@@ -2772,7 +2878,8 @@ public class ServiceStateTracker extends Handler {
                     AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
 
                     Intent intent = new Intent(ACTION_RADIO_OFF);
-                    mRadioOffIntent = PendingIntent.getBroadcast(context, 0, intent, 0);
+                    mRadioOffIntent = PendingIntent.getBroadcast(
+                            context, 0, intent, PendingIntent.FLAG_IMMUTABLE);
 
                     mAlarmSwitch = true;
                     if (DBG) log("Alarm setting");
@@ -2879,7 +2986,18 @@ public class ServiceStateTracker extends Handler {
             // Checking the Concurrent Service Supported flag first for all phone types.
             return true;
         } else if (mPhone.isPhoneTypeGsm()) {
-            return (mSS.getRilDataRadioTechnology() >= ServiceState.RIL_RADIO_TECHNOLOGY_UMTS);
+            int radioTechnology = mSS.getRilDataRadioTechnology();
+            // There are cases where we we would setup data connection even data is not yet
+            // attached. In these cases we check voice rat.
+            if (radioTechnology == ServiceState.RIL_RADIO_TECHNOLOGY_UNKNOWN
+                    && mSS.getDataRegState() != ServiceState.STATE_IN_SERVICE) {
+                radioTechnology = mSS.getRilVoiceRadioTechnology();
+            }
+            // Concurrent voice and data is not allowed for 2G technologies. It's allowed in other
+            // rats e.g. UMTS, LTE, etc.
+            return radioTechnology != ServiceState.RIL_RADIO_TECHNOLOGY_UNKNOWN
+                    && ServiceState.rilRadioTechnologyToAccessNetworkType(radioTechnology)
+                        != AccessNetworkType.GERAN;
         } else {
             return false;
         }
@@ -3193,7 +3311,7 @@ public class ServiceStateTracker extends Handler {
             // TODO: we may add filtering to reduce the event logged,
             // i.e. check preferred network setting, only switch to 2G, etc
             if (hasRilVoiceRadioTechnologyChanged) {
-                int cid = getCidFromCellIdentity(mNewCellIdentity);
+                long cid = getCidFromCellIdentity(mNewCellIdentity);
                 // NOTE: this code was previously located after mSS and mNewSS are swapped, so
                 // existing logs were incorrectly using the new state for "network_from"
                 // and STATE_OUT_OF_SERVICE for "network_to". To avoid confusion, use a new log tag
@@ -3263,7 +3381,8 @@ public class ServiceStateTracker extends Handler {
         if (hasChanged) {
             updateSpnDisplay();
 
-            tm.setNetworkOperatorNameForPhone(mPhone.getPhoneId(), mSS.getOperatorAlpha());
+            //UNISOC:Translation service provider name
+            //tm.setNetworkOperatorNameForPhone(mPhone.getPhoneId(),mSS.getOperatorAlpha());
             String operatorNumeric = mSS.getOperatorNumeric();
 
             if (!mPhone.isPhoneTypeGsm()) {
@@ -3292,6 +3411,12 @@ public class ServiceStateTracker extends Handler {
                     setOperatorIdd(operatorNumeric);
                 }
 
+                /*UNISOC: bug618350 add single pdp allowed by plmns feature@{*/
+                if (hasVoiceRegStateChanged || hasDataRegStateChanged.get(AccessNetworkConstants.TRANSPORT_TYPE_WWAN)) {
+                    mPhone.getDcTracker(AccessNetworkConstants.TRANSPORT_TYPE_WWAN).setSinglePDNAllowedByNetwork();
+                }
+                /* @} */
+
                 mLocaleTracker.updateOperatorNumeric(operatorNumeric);
             }
 
@@ -3300,6 +3425,10 @@ public class ServiceStateTracker extends Handler {
                             (mSS.getVoiceRoaming() || mSS.getDataRoaming()));
 
             setRoamingType(mSS);
+            /*UNISOC:BUG1321609 @{ */
+            updateSiganlConnectedStatus(mNrCfgValue, mLastSignalConnectedStatus, mSS.getNetworkRegistrationInfo(
+                    NetworkRegistrationInfo.DOMAIN_PS, AccessNetworkConstants.TRANSPORT_TYPE_WWAN));
+            /*UNISOC:BUG1321609 @} */
             log("Broadcasting ServiceState : " + mSS);
             // notify using PhoneStateListener and the legacy intent ACTION_SERVICE_STATE_CHANGED
             // notify service state changed only if the merged service state is changed.
@@ -4466,13 +4595,10 @@ public class ServiceStateTracker extends Handler {
     public void powerOffRadioSafely() {
         synchronized (this) {
             if (!mPendingRadioPowerOffAfterDataOff) {
-                int dds = SubscriptionManager.getDefaultDataSubscriptionId();
                 // To minimize race conditions we call cleanUpAllConnections on
-                // both if else paths instead of before this isDisconnected test.
-                if (mPhone.areAllDataDisconnected()
-                        && (dds == mPhone.getSubId()
-                        || (dds != mPhone.getSubId()
-                        && ProxyController.getInstance().areAllDataDisconnected(dds)))) {
+                //UNISOC: power off radio when dataconnection is disconnected on
+                // this phone, ignore the dataconnecton state on dds.
+                if (mPhone.areAllDataDisconnected()) {
                     // To minimize race conditions we do this after isDisconnected
                     for (int transport : mTransportManager.getAvailableTransports()) {
                         if (mPhone.getDcTracker(transport) != null) {
@@ -4489,6 +4615,9 @@ public class ServiceStateTracker extends Handler {
                         mPhone.mCT.mBackgroundCall.hangupIfAlive();
                         mPhone.mCT.mForegroundCall.hangupIfAlive();
                     }
+                    // UNISOC: Bug 1020803 Hang up all ims call
+                    hangupImsCall();
+
                     for (int transport : mTransportManager.getAvailableTransports()) {
                         if (mPhone.getDcTracker(transport) != null) {
                             mPhone.getDcTracker(transport).cleanUpAllConnections(
@@ -4496,15 +4625,6 @@ public class ServiceStateTracker extends Handler {
                         }
                     }
 
-                    if (dds != mPhone.getSubId()
-                            && !ProxyController.getInstance().areAllDataDisconnected(dds)) {
-                        if (DBG) log("Data is active on DDS.  Wait for all data disconnect");
-                        // Data is not disconnected on DDS. Wait for the data disconnect complete
-                        // before sending the RADIO_POWER off.
-                        ProxyController.getInstance().registerForAllDataDisconnected(dds, this,
-                                EVENT_ALL_DATA_DISCONNECTED);
-                        mPendingRadioPowerOffAfterDataOff = true;
-                    }
                     Message msg = Message.obtain(this);
                     msg.what = EVENT_SET_RADIO_POWER_OFF;
                     msg.arg1 = ++mPendingRadioPowerOffAfterDataOffTag;
@@ -4643,6 +4763,10 @@ public class ServiceStateTracker extends Handler {
         mPhone.setSignalStrengthReportingCriteria(
                 config.getIntArray(CarrierConfigManager.KEY_WCDMA_RSCP_THRESHOLDS_INT_ARRAY),
                 AccessNetworkType.UTRAN);
+        // UNISOC Add for bug1203813
+        mPhone.setSignalStrengthReportingCriteria(
+                config.getIntArray(CarrierConfigManager.KEY_GSM_RSSI_THRESHOLDS_INT_ARRAY),
+                AccessNetworkType.GERAN);
     }
 
     private void updateServiceStateLteEarfcnBoost(ServiceState serviceState, int lteEarfcn) {
@@ -4692,7 +4816,8 @@ public class ServiceStateTracker extends Handler {
             mPhone.mCT.mBackgroundCall.hangupIfAlive();
             mPhone.mCT.mForegroundCall.hangupIfAlive();
         }
-
+        // UNISOC: Bug 1020803 Hang up all ims call
+        hangupImsCall();
         mCi.setRadioPower(false, obtainMessage(EVENT_RADIO_POWER_OFF_DONE));
 
     }
@@ -5428,5 +5553,131 @@ public class ServiceStateTracker extends Handler {
             }
         }
         return operatorName;
+    }
+
+    // UNISOC: Bug 1020803 Hang up all ims call
+    private void hangupImsCall() {
+        ImsPhone imsPhone = (ImsPhone)(mPhone.getImsPhone());
+        if (imsPhone != null) {
+            log("hang up ims call");
+            if (imsPhone.isInCall()) {
+                if (mSS.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_IWLAN
+                        && imsPhone.isWifiCallingEnabled()) {
+                    return;
+                }
+                ((ImsPhoneCallTracker)(imsPhone.getCallTracker())).mRingingCall.hangupIfAlive();
+                ((ImsPhoneCallTracker)(imsPhone.getCallTracker())).mBackgroundCall.hangupIfAlive();
+                ((ImsPhoneCallTracker)(imsPhone.getCallTracker())).mForegroundCall.hangupIfAlive();
+            }
+        }
+    }
+
+    /*UNISOC: For 5G Featrue development @{*/
+    private void setForRadiointeractorListener() {
+        mPhone.getContext().bindService(
+                new Intent("com.android.sprd.telephony.server.RADIOINTERACTOR_SERVICE")
+                        .setPackage("com.android.sprd.telephony.server"), new ServiceConnection() {
+                    @Override
+                    public void onServiceConnected(ComponentName name, IBinder service) {
+                        log("on radioInteractor service connected");
+                        mRadioInteractor.listen(mRadioInteractorCallbackListener,
+                                RadioInteractorCallbackListener.LISTEN_SIGNAL_CONNECTION_STATUS_EVENT, false);
+                        mRadioInteractor.listen(mRadioInteractorCallbackListener,
+                                RadioInteractorCallbackListener.LISTEN_SMART_NR_CHANGED_EVENT, false);
+                        mRadioInteractor.listen(mRadioInteractorCallbackListener,
+                                RadioInteractorCallbackListener.LISTEN_NR_CFG_INFO_EVENT, false);
+                    }
+
+                    @Override
+                    public void onServiceDisconnected(ComponentName name) {
+                        mRadioInteractor.listen(mRadioInteractorCallbackListener,
+                                RadioInteractorCallbackListener.LISTEN_NONE);
+                    }
+                }, Context.BIND_AUTO_CREATE);
+    }
+
+    private RadioInteractorCallbackListener getRadioInteractorCallbackListener(final int phoneId) {
+        return new RadioInteractorCallbackListener(phoneId){
+            @Override
+            public void onSignalConnectionStatusEvent(Object object) {
+                log("onSignalConnectionStatusEvent");
+                Message message = ServiceStateTracker.this.obtainMessage(
+                        ServiceStateTracker.EVENT_SIGNAL_CONNECTION_STATUS, object);
+                ServiceStateTracker.this.sendMessage(message);
+            }
+
+            @Override
+            public void onSmartNrChangedEvent() {
+                log("onSmartNrChangedEvent");
+                Message message = ServiceStateTracker.this.obtainMessage(
+                        ServiceStateTracker.EVENT_SMART_NR_CHANGED_EVENT);
+                ServiceStateTracker.this.sendMessage(message);
+            }
+
+            @Override
+            public void onNrCfgInfoEvent(Object object) {
+                log("onNrCfgInfoEvent");
+                Message message = ServiceStateTracker.this.obtainMessage(
+                        ServiceStateTracker.EVENT_NR_CFG_INFO_EVENT, object);
+                ServiceStateTracker.this.sendMessage(message);
+            }
+        };
+    }
+
+    private boolean updateSiganlConnectedStatus (
+            int nrCfgValue, SignalConnectedStatus signalConnectedStatus, NetworkRegistrationInfo regState) {
+        if (regState == null || signalConnectedStatus == null || mPhone == null) return false;
+        DataSpecificRegistrationInfo dataSpecificStates = regState.getDataSpecificInfo();
+
+        int newNrStatus = regState.getNrState();
+        /* cmcc: in idel state,if cerge report 13,need to display 5g icon
+         * in connected state, only SCG is established, display 5g icon
+         * ctcc: current type is connected or idle and sib2 is support 5G endc, need to display 5G
+         * in connected state, only SCG is established, display 5g icon
+        */
+        String engtestNrStr = SystemProperties.get("persist.radio.engtest.nr.enable", "false");
+        log("updateSiganlConnectedStatus: " + engtestNrStr + "nrCfgValue =  " + nrCfgValue);
+        boolean smartNrStatus = ("true".equals(engtestNrStr)) &&
+                mPhone.getSubId() == SubscriptionManager.getDefaultDataSubscriptionId();
+        if (signalConnectedStatus.getMode() == SignalConnectedStatus.CONNECTED_TYPE) {
+            if (signalConnectedStatus.getAccess() == SignalConnectedStatus.RADIO_ACESS_TYPE_NR
+                   && signalConnectedStatus.getCoreNetwork() == SignalConnectedStatus.CORE_NETWORK_EPC) {
+               newNrStatus = NetworkRegistrationInfo.NR_STATE_CONNECTED;
+            } else if (smartNrStatus) {
+                newNrStatus = needUpdateNrStatus(dataSpecificStates);
+                if (newNrStatus != NetworkRegistrationInfo.NR_STATE_NOT_RESTRICTED
+                        && nrCfgValue == 1) {
+                    newNrStatus = NetworkRegistrationInfo.NR_STATE_NOT_RESTRICTED;
+                }
+                log("updateSiganlConnectedStatus newNrStatus : " + newNrStatus);
+            } else {
+               newNrStatus = NetworkRegistrationInfo.NR_STATE_NONE;
+            }
+        } else {
+            newNrStatus = needUpdateNrStatus(dataSpecificStates);
+            if (smartNrStatus) {
+                if (newNrStatus != NetworkRegistrationInfo.NR_STATE_NOT_RESTRICTED
+                        && nrCfgValue == 1) {
+                    newNrStatus = NetworkRegistrationInfo.NR_STATE_NOT_RESTRICTED;
+                }
+            }
+            log("updateSiganlConnectedStatus newNrStatus : " + newNrStatus);
+        }
+
+        boolean hasChanged = newNrStatus != regState.getNrState();
+        regState.setNrState(newNrStatus);
+        return hasChanged;
+    }
+
+    private int needUpdateNrStatus(DataSpecificRegistrationInfo dataSpecificStates) {
+        int nrStatus = NetworkRegistrationInfo.NR_STATE_NONE;
+        if (dataSpecificStates != null && dataSpecificStates.isEnDcAvailable) {
+            if (!dataSpecificStates.isDcNrRestricted && dataSpecificStates.isNrAvailable) {
+                nrStatus = NetworkRegistrationInfo.NR_STATE_NOT_RESTRICTED;
+            } else {
+                nrStatus = NetworkRegistrationInfo.NR_STATE_RESTRICTED;
+            }
+        }
+        return nrStatus;
     }
 }

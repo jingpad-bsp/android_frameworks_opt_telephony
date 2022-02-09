@@ -72,7 +72,11 @@ public class CellBroadcastMessage implements Parcelable {
      * @hide
      */
     public int getSubId() {
-        return mSubId;
+        if (mSmsCbMessage != null){
+            return mSmsCbMessage.getSubId();
+        } else {
+            return mSubId;
+        }
     }
 
     @UnsupportedAppUsage
@@ -238,8 +242,14 @@ public class CellBroadcastMessage implements Parcelable {
             cmasInfo = null;
         }
 
+        int subId = 0;
+        final int subIdColumn = cursor.getColumnIndexOrThrow("sub_id");
+        if (subIdColumn != -1 && !cursor.isNull(subIdColumn)) {
+            subId = cursor.getInt(subIdColumn);
+        }
+
         SmsCbMessage msg = new SmsCbMessage(format, geoScope, serialNum, location, category,
-                language, body, priority, etwsInfo, cmasInfo);
+                language, body, priority, etwsInfo, cmasInfo, subId);
 
         long deliveryTime = cursor.getLong(cursor.getColumnIndexOrThrow(
                 Telephony.CellBroadcasts.DELIVERY_TIME));
@@ -255,7 +265,7 @@ public class CellBroadcastMessage implements Parcelable {
      */
     @UnsupportedAppUsage
     public ContentValues getContentValues() {
-        ContentValues cv = new ContentValues(16);
+        ContentValues cv = new ContentValues(17);
         SmsCbMessage msg = mSmsCbMessage;
         cv.put(Telephony.CellBroadcasts.GEOGRAPHICAL_SCOPE, msg.getGeographicalScope());
         SmsCbLocation location = msg.getLocation();
@@ -292,6 +302,7 @@ public class CellBroadcastMessage implements Parcelable {
             cv.put(Telephony.CellBroadcasts.CMAS_CERTAINTY, cmasInfo.getCertainty());
         }
 
+        cv.put("sub_id", mSmsCbMessage.getSubId());
         return cv;
     }
 

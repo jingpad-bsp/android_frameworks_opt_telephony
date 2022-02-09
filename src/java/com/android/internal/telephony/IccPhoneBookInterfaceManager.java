@@ -33,12 +33,15 @@ import com.android.internal.telephony.uicc.IccRecords;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import com.android.internal.telephony.uicc.RuimRecords;
+import com.android.internal.telephony.uicc.UiccController;
+
 
 /**
  * SimPhoneBookInterfaceManager to provide an inter-process communication to
  * access ADN-like SIM records.
  */
-public class IccPhoneBookInterfaceManager {
+public class IccPhoneBookInterfaceManager extends AbsIccPhoneBookInterfaceManager {
     static final String LOG_TAG = "IccPhoneBookIM";
     @UnsupportedAppUsage
     protected static final boolean DBG = true;
@@ -52,7 +55,7 @@ public class IccPhoneBookInterfaceManager {
     protected static final int EVENT_LOAD_DONE = 2;
     protected static final int EVENT_UPDATE_DONE = 3;
 
-    private static final class Request {
+    protected static final class Request {
         AtomicBoolean mStatus = new AtomicBoolean(false);
         Object mResult = null;
     }
@@ -115,6 +118,21 @@ public class IccPhoneBookInterfaceManager {
         this.mPhone = phone;
         IccRecords r = phone.getIccRecords();
         if (r != null) {
+            /**
+             * UNISOC: add for bug1072750 AndroidQ porting for USIM/SIM phonebook. support CDMA,change the interface of support USIM
+             * @{
+             */
+            if (r instanceof RuimRecords) {
+                // This means CDMA card is inserted, get ADN from USIM
+                IccRecords records3gpp = UiccController.getInstance()
+                        .getIccRecords(phone.getPhoneId(), UiccController.APP_FAM_3GPP);
+                if (records3gpp != null) {
+                    r = records3gpp;
+                }
+            }
+            /*
+             * @}
+             */
             mAdnCache = r.getAdnCache();
         }
     }
@@ -124,6 +142,22 @@ public class IccPhoneBookInterfaceManager {
 
     public void updateIccRecords(IccRecords iccRecords) {
         if (iccRecords != null) {
+            /**
+             * UNISOC: add for bug1072750 AndroidQ porting for USIM/SIM phonebook.support CDMA,change the interface of support USIM
+             * @{
+             */
+            // Do not update ICC records to CSIM
+            if (iccRecords instanceof RuimRecords) {
+                IccRecords records3gpp = UiccController.getInstance()
+                        .getIccRecords(this.mPhone.getPhoneId(), UiccController.APP_FAM_3GPP);
+                if (records3gpp != null) {
+                    mAdnCache = records3gpp.getAdnCache();
+                    return;
+                }
+            }
+            /*
+             * @}
+             */
             mAdnCache = iccRecords.getAdnCache();
         } else {
             mAdnCache = null;

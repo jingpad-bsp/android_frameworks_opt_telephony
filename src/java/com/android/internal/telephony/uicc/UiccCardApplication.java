@@ -26,7 +26,9 @@ import android.os.RegistrantList;
 import android.telephony.Rlog;
 
 import com.android.internal.telephony.CommandsInterface;
+import com.android.internal.telephony.CommandException;
 import com.android.internal.telephony.PhoneConstants;
+import com.android.internal.telephony.TelePhonebookUtils;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppState;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppType;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.PersoSubState;
@@ -158,11 +160,18 @@ public class UiccCardApplication {
                 mIccRecords = createIccRecords(as.app_type, c, ci);
             }
 
+            /* UNISOC: Support SimLock
+             * @orig
+             *
             if (mPersoSubState != oldPersoSubState &&
                     mPersoSubState == PersoSubState.PERSOSUBSTATE_SIM_NETWORK) {
                 notifyNetworkLockedRegistrantsIfNeeded(null);
             }
-
+            /* @{ */
+            if (mPersoSubState != oldPersoSubState && (mPersoSubState.isPersoSubStateSimLock())) {
+                notifyNetworkLockedRegistrantsIfNeeded(null);
+            }
+            /* @} */
             if (mAppState != oldAppState) {
                 if (DBG) log(oldAppType + " changed state: " + oldAppState + " -> " + mAppState);
                 // If the app state turns to APPSTATE_READY, then query FDN status,
@@ -206,11 +215,17 @@ public class UiccCardApplication {
     private IccFileHandler createIccFileHandler(AppType type) {
         switch (type) {
             case APPTYPE_SIM:
-                return new SIMFileHandler(this, mAid, mCi);
+                /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+                //return new SIMFileHandler(this, mAid, mCi);
+                return new SIMFileHandlerEx(this, mAid, mCi);
+                /* @} */
             case APPTYPE_RUIM:
                 return new RuimFileHandler(this, mAid, mCi);
             case APPTYPE_USIM:
-                return new UsimFileHandler(this, mAid, mCi);
+                /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+                //return new UsimFileHandler(this, mAid, mCi);
+                return new UsimFileHandlerEx(this, mAid, mCi);
+                /* @} */
             case APPTYPE_CSIM:
                 return new CsimFileHandler(this, mAid, mCi);
             case APPTYPE_ISIM:
@@ -266,6 +281,10 @@ public class UiccCardApplication {
             int attemptsRemaining = -1;
 
             if (ar.exception == null) {
+                /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+                TelePhonebookUtils.broadcastFdnChangedDone(mIccFdnEnabled,
+                        mDesiredFdnEnabled, getPhoneId());
+                /* @} */
                 mIccFdnEnabled = mDesiredFdnEnabled;
                 if (DBG) log("EVENT_CHANGE_FACILITY_FDN_DONE: " +
                         "mIccFdnEnabled=" + mIccFdnEnabled);
@@ -382,6 +401,16 @@ public class UiccCardApplication {
             if (mDestroyed) {
                 loge("Received message " + msg + "[" + msg.what
                         + "] while being destroyed. Ignoring.");
+                /* When UiccCardApp dispose,handle message and return exception@{*/
+                ar = (AsyncResult) msg.obj;
+                if (ar != null) {
+                    ar.exception = new CommandException(CommandException.Error.UICC_CARD_APPLICATION_DISPOSED);
+                    Message response = (Message) ar.userObj;
+                    if (response != null) {
+                        AsyncResult.forMessage(response).exception = ar.exception;
+                        response.sendToTarget();
+                    }
+                }/* @} */
                 return;
             }
 
@@ -539,11 +568,17 @@ public class UiccCardApplication {
         if (mDestroyed) {
             return;
         }
-
+        /* UNISOC: Support SimLock
+         * @orig
+         *
         if (mAppState == AppState.APPSTATE_SUBSCRIPTION_PERSO &&
                 mPersoSubState == PersoSubState.PERSOSUBSTATE_SIM_NETWORK) {
+                /* @{ */
+        if (mAppState == AppState.APPSTATE_SUBSCRIPTION_PERSO && (mPersoSubState.isPersoSubStateSimLock())) {
+            /* @} */
             if (r == null) {
-                if (DBG) log("Notifying registrants: NETWORK_LOCKED");
+//                if (DBG) log("Notifying registrants: NETWORK_LOCKED");
+                if (DBG) log("Notifying registrants: " + mPersoSubState);
                 mNetworkLockedRegistrants.notifyRegistrants();
             } else {
                 if (DBG) log("Notifying 1 registrant: NETWORK_LOCED");

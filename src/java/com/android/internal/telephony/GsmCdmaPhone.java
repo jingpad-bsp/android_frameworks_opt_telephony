@@ -140,6 +140,7 @@ public class GsmCdmaPhone extends Phone {
     public static final int RESTART_ECM_TIMER = 0; // restart Ecm timer
     public static final int CANCEL_ECM_TIMER = 1; // cancel Ecm timer
     private static final String PREFIX_WPS = "*272";
+    private static final String SS_SERVICE_CLASS_PROP = "gsm.ss.sc";
     private CdmaSubscriptionSourceManager mCdmaSSM;
     public int mCdmaSubscriptionSource = CdmaSubscriptionSourceManager.SUBSCRIPTION_SOURCE_UNKNOWN;
     private PowerManager.WakeLock mWakeLock;
@@ -288,6 +289,7 @@ public class GsmCdmaPhone extends Phone {
                 // Only handle carrier config changes for this phone id.
                 if (mPhoneId == intent.getIntExtra(CarrierConfigManager.EXTRA_SLOT_INDEX, -1)) {
                     sendMessage(obtainMessage(EVENT_CARRIER_CONFIG_CHANGED));
+                    setCarrierConfigParameter(intent); //UNISOC: add for bug1033847
                 }
             } else if (TelecomManager.ACTION_CURRENT_TTY_MODE_CHANGED.equals(action)) {
                 int ttyMode = intent.getIntExtra(
@@ -612,9 +614,14 @@ public class GsmCdmaPhone extends Phone {
                 switch (getDcTracker(currentTransport).getState(apnType)) {
                     case CONNECTED:
                     case DISCONNECTING:
-                        if (mCT.mState != PhoneConstants.State.IDLE
+                        //UNISOC: bug599552 data icon shown under GSM when make emergency call
+                        if (getState() != PhoneConstants.State.IDLE
                                 && !mSST.isConcurrentVoiceAndDataAllowed()) {
                             ret = PhoneConstants.DataState.SUSPENDED;
+                        /* UNISOC: FEATURE_SUSPEND_DATA_WHEN_IN_CALL @{ */
+                        } else if (mDcTrackers.get(currentTransport).isSuspended()) {
+                            ret = PhoneConstants.DataState.SUSPENDED;
+                        /* @} */
                         } else {
                             ret = PhoneConstants.DataState.CONNECTED;
                         }
@@ -777,7 +784,11 @@ public class GsmCdmaPhone extends Phone {
     @Override
     public void registerForSuppServiceNotification(
             Handler h, int what, Object obj) {
-        mSsnRegistrants.addUnique(h, what, obj);
+        /* UNISOC: Explicit Transfer Call
+         * @Org: mSsnRegistrants.addUnique(h, what, obj);
+         *{ */
+        mSsnRegistrants.add(h, what, obj);
+        /* @} */
         if (mSsnRegistrants.size() == 1) mCi.setSuppServiceNotifications(true, null);
     }
 
@@ -934,6 +945,13 @@ public class GsmCdmaPhone extends Phone {
         if ( imsPhone != null && imsPhone.getRingingCall().isRinging()) {
             return imsPhone.getRingingCall();
         }
+        //UNISOC: add for bug890941
+        if (!mCT.mRingingCall.isRinging()
+                && mCT.getRingingHandoverConnection() != null
+                && mCT.getRingingHandoverConnection().getCall() != null
+                && mCT.getRingingHandoverConnection().getCall().isRinging()) {
+            return mCT.getRingingHandoverConnection().getCall();
+        }
         return mCT.mRingingCall;
     }
 
@@ -945,22 +963,22 @@ public class GsmCdmaPhone extends Phone {
      * the voice registration state with the data registration state.
      */
     private ServiceState mergeServiceStates(ServiceState baseSs, ServiceState imsSs) {
+        // No need to merge states if the baseSs is IN_SERVICE.
+        if (baseSs.getVoiceRegState() == ServiceState.STATE_IN_SERVICE) {
+            return baseSs;
+        }
         // "IN_SERVICE" in this case means IMS is registered.
         if (imsSs.getVoiceRegState() != ServiceState.STATE_IN_SERVICE) {
             return baseSs;
         }
 
-        if (imsSs.getRilDataRadioTechnology() == ServiceState.RIL_RADIO_TECHNOLOGY_IWLAN) {
-            ServiceState newSs = new ServiceState(baseSs);
-            // Voice override for IWLAN. In this case, voice registration is OUT_OF_SERVICE, but
-            // the data RAT is IWLAN, so use that as a basis for determining whether or not the
-            // physical link is available.
-            newSs.setVoiceRegState(baseSs.getDataRegState());
-            newSs.setEmergencyOnly(false); // only get here if voice is IN_SERVICE
-            return newSs;
-        }
-
-        return baseSs;
+        ServiceState newSs = new ServiceState(baseSs);
+        // Voice override for IMS case. In this case, voice registration is OUT_OF_SERVICE, but
+        // IMS is available, so use data registration state as a basis for determining
+        // whether or not the physical link is available.
+        newSs.setVoiceRegState(baseSs.getDataRegState());
+        newSs.setEmergencyOnly(false); // only get here if voice is IN_SERVICE
+        return newSs;
     }
 
     private boolean handleCallDeflectionIncallSupplementaryService(
@@ -1768,7 +1786,11 @@ public class GsmCdmaPhone extends Phone {
             if (use_usim) {
                 return (mSimRecords != null) ? mSimRecords.getMsisdnNumber() : null;
             }
-            return mSST.getMdnNumber();
+            if (!TextUtils.isEmpty(mSST.getMdnNumber())) {
+                return mSST.getMdnNumber();
+            } else {
+                return (mSimRecords != null) ? mSimRecords.getMsisdnNumber() : null;
+            }
         }
     }
 
@@ -2491,7 +2513,7 @@ public class GsmCdmaPhone extends Phone {
                 // Force update IMS service if it is available, if it isn't the config will be
                 // updated when ImsPhoneCallTracker opens a connection.
                 ImsManager imsManager = ImsManager.getInstance(mContext, mPhoneId);
-                if (imsManager.isServiceAvailable()) {
+                if (imsManager.isServiceAvailable() && /*UNISOC: add for bug1033847*/getCarrierConfigParameter()) {
                     imsManager.updateImsServiceConfig(true);
                 } else {
                     logd("ImsManager is not available to update CarrierConfig.");
@@ -2647,7 +2669,21 @@ public class GsmCdmaPhone extends Phone {
                 logd("Event EVENT_SSN Received");
                 if (isPhoneTypeGsm()) {
                     ar = (AsyncResult) msg.obj;
+                    /* UNISOC: add for Bug1112728&Bug1244296 @{ */
                     SuppServiceNotification not = (SuppServiceNotification) ar.result;
+                    GsmCdmaConnection conn = findConnection(not.index);
+                    if (conn != null) {
+                        // CODE_2 is valid only when type is NOTIFICATION_TYPE_CODE_2
+                        if (not.notificationType == SuppServiceNotification.NOTIFICATION_TYPE_CODE_2) {
+                            if (not.code == SuppServiceNotification.CODE_2_CALL_ON_HOLD) {
+                                conn.onConnectionEvent(android.telecom.Connection.EVENT_CALL_REMOTELY_HELD, null);
+                            } else if (not.code == SuppServiceNotification.CODE_2_CALL_RETRIEVED) {
+                                conn.onConnectionEvent(android.telecom.Connection.EVENT_CALL_REMOTELY_UNHELD, null);
+                            }
+                        }
+                    }
+
+                    /* @} */
                     mSsnRegistrants.notifyRegistrants(ar);
                 }
                 break;
@@ -3113,6 +3149,10 @@ public class GsmCdmaPhone extends Phone {
             r.registerForRecordsEvents(this, EVENT_ICC_RECORD_EVENTS, null);
             r.registerForRecordsLoaded(this, EVENT_SIM_RECORDS_LOADED, null);
         } else {
+            logd("registerForIccRecordEvents mSimRecords " + mSimRecords);
+            if(mSimRecords != null) {
+                mSimRecords.registerForRecordsEvents(this, EVENT_ICC_RECORD_EVENTS, null);
+            }
             r.registerForRecordsLoaded(this, EVENT_RUIM_RECORDS_LOADED, null);
             if (isPhoneTypeCdmaLte()) {
                 // notify simRecordsLoaded registrants for cdmaLte phone
@@ -3976,4 +4016,47 @@ public class GsmCdmaPhone extends Phone {
                 Settings.Secure.PREFERRED_TTY_MODE, TelecomManager.TTY_MODE_OFF);
         updateUiTtyMode(ttyMode);
     }
+
+    private GsmCdmaConnection findConnection(int index) {
+        GsmCdmaCall fgCall = getForegroundCall();
+        GsmCdmaCall bgCall = getBackgroundCall();
+        try {
+            GsmCdmaConnection conn = mCT.getConnectionByIndex(fgCall, index);
+            if (conn != null) {
+                return conn;
+            } else {
+                return mCT.getConnectionByIndex(bgCall, index);
+            }
+        } catch (CallStateException e) {
+            if (DBG) Rlog.d(LOG_TAG, "get connection error:", e);
+        }
+        return null;
+    }
+
+    /*UNISOC: modify by BUG 739621 @{ */
+    public void notifyServiceStateChanged() {
+        super.notifyServiceStateChangedP(getServiceState());
+    }
+    /* @} */
+    /*UNISOC: add for bug1033847 */
+    public void setCarrierConfigParameter(Intent intent) {
+    }
+
+    public boolean getCarrierConfigParameter() {
+        return true;
+    }
+    /*@}*/
+
+    /*UNISOC: add for bug1108786 @{*/
+    public void setVoWifiUnregister(){
+
+    }
+    /*@}*/
+
+    /*UNISOC: add for bug15235263 @{*/
+    public void setServiceClass(int serviceClass) {
+        Rlog.d(LOG_TAG, "setServiceClass: " + serviceClass);
+        SystemProperties.set(SS_SERVICE_CLASS_PROP, String.valueOf(serviceClass));
+    }
+    /*@}*/
 }

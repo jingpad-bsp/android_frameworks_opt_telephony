@@ -188,8 +188,8 @@ public class GsmCellBroadcastHandler extends CellBroadcastHandler {
                     iter.remove();
                 }
             }
-
-            return GsmSmsCbMessage.createSmsCbMessage(mContext, header, location, pdus);
+            //add sub_id for sprd
+            return GsmSmsCbMessage.createSmsCbMessage(mContext, header, location, pdus, mPhone.getSubId());
 
         } catch (RuntimeException e) {
             loge("Error in decoding SMS CB pdu", e);

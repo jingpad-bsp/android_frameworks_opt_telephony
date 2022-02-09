@@ -16,19 +16,6 @@
 
 package com.android.internal.telephony;
 
-import static android.Manifest.permission.SEND_SMS_NO_CONFIRMATION;
-import static android.telephony.SmsManager.RESULT_ERROR_FDN_CHECK_FAILURE;
-import static android.telephony.SmsManager.RESULT_ERROR_GENERIC_FAILURE;
-import static android.telephony.SmsManager.RESULT_ERROR_LIMIT_EXCEEDED;
-import static android.telephony.SmsManager.RESULT_ERROR_NO_SERVICE;
-import static android.telephony.SmsManager.RESULT_ERROR_NULL_PDU;
-import static android.telephony.SmsManager.RESULT_ERROR_RADIO_OFF;
-import static android.telephony.SmsManager.RESULT_ERROR_SHORT_CODE_NEVER_ALLOWED;
-import static android.telephony.SmsManager.RESULT_ERROR_SHORT_CODE_NOT_ALLOWED;
-
-import static com.android.internal.telephony.IccSmsInterfaceManager.SMS_MESSAGE_PERIOD_NOT_SPECIFIED;
-import static com.android.internal.telephony.IccSmsInterfaceManager.SMS_MESSAGE_PRIORITY_NOT_SPECIFIED;
-
 import android.annotation.Nullable;
 import android.annotation.UnsupportedAppUsage;
 import android.annotation.UserIdInt;
@@ -47,15 +34,18 @@ import android.content.pm.PackageItemInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.database.ContentObserver;
+import android.database.Cursor;
 import android.database.sqlite.SqliteWrapper;
 import android.net.Uri;
 import android.os.AsyncResult;
+import android.os.AsyncTask;
 import android.os.Binder;
 import android.os.Handler;
 import android.os.Message;
 import android.os.PersistableBundle;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.provider.Telephony;
@@ -69,11 +59,13 @@ import android.telephony.PhoneNumberUtils;
 import android.telephony.Rlog;
 import android.telephony.ServiceState;
 import android.telephony.SmsManager;
+import android.telephony.SmsManagerEx;
 import android.telephony.TelephonyManager;
 import android.text.Html;
 import android.text.Spanned;
 import android.text.TextUtils;
 import android.util.EventLog;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -83,10 +75,12 @@ import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.TextView;
 
+import com.android.ims.internal.ImsManagerEx;
 import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.GsmAlphabet.TextEncodingDetails;
 import com.android.internal.telephony.cdma.sms.UserData;
+import com.android.internal.telephony.gsm.GsmSMSDispatcher;
 import com.android.internal.telephony.uicc.UiccCard;
 import com.android.internal.telephony.uicc.UiccController;
 
@@ -96,6 +90,18 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static android.Manifest.permission.SEND_SMS_NO_CONFIRMATION;
+import static android.telephony.SmsManager.RESULT_ERROR_FDN_CHECK_FAILURE;
+import static android.telephony.SmsManager.RESULT_ERROR_GENERIC_FAILURE;
+import static android.telephony.SmsManager.RESULT_ERROR_LIMIT_EXCEEDED;
+import static android.telephony.SmsManager.RESULT_ERROR_NO_SERVICE;
+import static android.telephony.SmsManager.RESULT_ERROR_NULL_PDU;
+import static android.telephony.SmsManager.RESULT_ERROR_RADIO_OFF;
+import static android.telephony.SmsManager.RESULT_ERROR_SHORT_CODE_NEVER_ALLOWED;
+import static android.telephony.SmsManager.RESULT_ERROR_SHORT_CODE_NOT_ALLOWED;
+import static com.android.internal.telephony.IccSmsInterfaceManager.SMS_MESSAGE_PERIOD_NOT_SPECIFIED;
+import static com.android.internal.telephony.IccSmsInterfaceManager.SMS_MESSAGE_PRIORITY_NOT_SPECIFIED;
 
 public abstract class SMSDispatcher extends Handler {
     static final String TAG = "SMSDispatcher";    // accessed from inner class
@@ -143,8 +149,9 @@ public abstract class SMSDispatcher extends Handler {
     protected static final int EVENT_NEW_ICC_SMS = 14;
     protected static final int EVENT_ICC_CHANGED = 15;
     protected static final int EVENT_GET_IMS_SERVICE = 16;
-
-
+       /* Unisoc: add for ctcc DM @{ */
+    protected static final String CTCC_DM_SERVER_NUMBER = "10659401";
+    /* @} */
     @UnsupportedAppUsage
     protected Phone mPhone;
     @UnsupportedAppUsage
@@ -664,7 +671,6 @@ public abstract class SMSDispatcher extends Handler {
     protected void handleSendComplete(AsyncResult ar) {
         SmsTracker tracker = (SmsTracker) ar.userObj;
         PendingIntent sentIntent = tracker.mSentIntent;
-
         if (ar.result != null) {
             tracker.mMessageRef = ((SmsResponse)ar.result).mMessageRef;
         } else {
@@ -685,11 +691,11 @@ public abstract class SMSDispatcher extends Handler {
 
             int ss = mPhone.getServiceState().getState();
 
-            if ( tracker.mImsRetry > 0 && ss != ServiceState.STATE_IN_SERVICE) {
+            if ( tracker.mImsRetry > 0 && ss != ServiceState.STATE_IN_SERVICE && !ImsManagerEx.isVoLTERegisteredForPhone(mPhone.getPhoneId())) {
                 // This is retry after failure over IMS but voice is not available.
                 // Set retry to max allowed, so no retry is sent and
                 //   cause RESULT_ERROR_GENERIC_FAILURE to be returned to app.
-                tracker.mRetryCount = MAX_SEND_RETRIES;
+                tracker.mRetryCount = getMaxSendRetries();
 
                 Rlog.d(TAG, "handleSendComplete: Skipping retry: "
                 +" isIms()="+isIms()
@@ -700,11 +706,11 @@ public abstract class SMSDispatcher extends Handler {
             }
 
             // if sms over IMS is not supported on data and voice is not available...
-            if (!isIms() && ss != ServiceState.STATE_IN_SERVICE) {
+            if (!isIms() && ss != ServiceState.STATE_IN_SERVICE && !ImsManagerEx.isVoLTERegisteredForPhone(mPhone.getPhoneId())) {
                 tracker.onFailed(mContext, getNotInServiceError(ss), 0/*errorCode*/);
             } else if ((((CommandException)(ar.exception)).getCommandError()
                     == CommandException.Error.SMS_FAIL_RETRY) &&
-                   tracker.mRetryCount < MAX_SEND_RETRIES) {
+                   tracker.mRetryCount < getMaxSendRetries()) {
                 // Retry after a delay if needed.
                 // TODO: According to TS 23.040, 9.2.3.6, we should resend
                 //       with the same TP-MR as the failed message, and
@@ -863,6 +869,9 @@ public abstract class SMSDispatcher extends Handler {
                          String callingPkg, boolean persistMessage, int priority,
                          boolean expectMore, int validityPeriod, boolean isForVvm) {
         Rlog.d(TAG, "sendText");
+        if((this instanceof GsmSMSDispatcher) && validityPeriod < 0){//by sprd
+            validityPeriod = getRelativeValidityPeriod(validityPeriod);
+        }
         SmsMessageBase.SubmitPduBase pdu = getSubmitPdu(
                 scAddr, destAddr, text, (deliveryIntent != null), null, priority, validityPeriod);
         if (pdu != null) {
@@ -986,6 +995,11 @@ public abstract class SMSDispatcher extends Handler {
             ArrayList<String> parts, ArrayList<PendingIntent> sentIntents,
             ArrayList<PendingIntent> deliveryIntents, Uri messageUri, String callingPkg,
             boolean persistMessage, int priority, boolean expectMore, int validityPeriod) {
+        Rlog.d(TAG, "sendMultipartText");
+        if((this instanceof GsmSMSDispatcher) && validityPeriod < 0){//by sprd
+            validityPeriod = getRelativeValidityPeriod(validityPeriod);
+        }
+
         final String fullMessageText = getMultipartMessageText(parts);
         int refNumber = getNextConcatenatedRef() & 0x00FF;
         int encoding = SmsConstants.ENCODING_UNKNOWN;
@@ -1131,7 +1145,48 @@ public abstract class SMSDispatcher extends Handler {
             }
         }
     }
+    public static final int IS_TRUE_SIM_IN_THAILAND = 10000;
+    public static final int NOT_TRUE_SIM_IN_THAILAND = 10001;
+    public static final int NOT_IN_THAILAND = 10002;
+    public static final int DONOTHING_IN_THAILAND = 10003;
+  public static  int judgeTrueSIM2(Phone phone,Context mContext) {
+  if(phone.getPhoneId()==0)
+  {
+    return DONOTHING_IN_THAILAND;
+  }
+  TelephonyManager mmTelephonyManager= (TelephonyManager) mContext.getSystemService(Context.TELEPHONY_SERVICE);
+ //  final String MccMnc=mmTelephonyManager.getNetworkOperatorForPhone(1);//for sim2
+   final String MccMnc=mmTelephonyManager.getSimOperatorNumericForPhone(1);
+   if(MccMnc==null || "".equals(MccMnc)) return DONOTHING_IN_THAILAND;//Modify for bug 861510
+   final String Mcc=MccMnc.substring(0,3);
+   final String Mnc=MccMnc.substring(3);
+    Log.w(TAG,"phone.getPhoneId()"+phone.getPhoneId());
 
+   Log.w(TAG,"Mcc"+Mcc+"Mnc"+Mnc);
+    if(!Mcc.equals("520"))
+    {
+      return NOT_IN_THAILAND;
+    }
+    if(Mnc.equals("00")||Mnc.equals("04")||Mnc.equals("99"))
+    {
+      return IS_TRUE_SIM_IN_THAILAND;
+    }
+    else
+    {
+      return NOT_TRUE_SIM_IN_THAILAND;
+    }
+
+}
+    public static boolean checktheOperatorIsThailand() {
+        String operator = SystemProperties.get("ro.Thailand.operator");
+        if(TextUtils.isEmpty(operator)){
+            operator = SystemProperties.get("ro.operator");
+        }
+        if(operator != null && operator.toLowerCase().equals("thailand_true")){
+            return true;
+        }
+            return false;
+    }
     /**
      * Send an SMS
      * @param tracker will contain:
@@ -1164,7 +1219,13 @@ public abstract class SMSDispatcher extends Handler {
             tracker.onFailed(mContext, RESULT_ERROR_NO_SERVICE, 0/*errorCode*/);
             return;
         }
-
+      if(checktheOperatorIsThailand()){
+      if((judgeTrueSIM2(mPhone,mContext)==NOT_IN_THAILAND)||(judgeTrueSIM2(mPhone,mContext)==NOT_TRUE_SIM_IN_THAILAND)){
+            Log.w(TAG,"the number does not support sending sms");
+            tracker.onFailed(mContext, RESULT_ERROR_GENERIC_FAILURE, 0/*errorCode*/);
+           return;
+        }
+       }
         if (pdu == null) {
             Rlog.e(TAG, "Empty PDU");
             tracker.onFailed(mContext, RESULT_ERROR_NULL_PDU, 0/*errorCode*/);
@@ -1337,6 +1398,15 @@ public abstract class SMSDispatcher extends Handler {
         }
 
         CharSequence appLabel = getAppLabel(tracker.getAppPackageName(), tracker.mUserId);
+
+        // add for bug 602244 begin
+        if (tracker.mAppInfo.packageName
+                .equals("com.android.messaging.smilplayer")) {
+            Log.d(TAG, "replace the package name");
+            appLabel = getAppLabel("com.android.messaging", tracker.mUserId);
+        }
+        // add for bug 602244 end
+
         Resources r = Resources.getSystem();
         Spanned messageText = Html.fromHtml(r.getString(R.string.sms_control_message, appLabel));
 
@@ -1641,10 +1711,34 @@ public abstract class SMSDispatcher extends Handler {
          * @return The telephony provider URI if stored
          */
         private Uri persistSentMessageIfRequired(Context context, int messageType, int errorCode) {
+            // add for bug 597785 begin
+            Log.e(TAG,"enter persistSentMessageIfRequired(), mAppInfo.packageName = ["
+                            + mAppInfo.packageName + "], mPersistMessage = ["
+                            + mPersistMessage + "]", new Throwable());
             if (!mIsText || !mPersistMessage ||
                     !SmsApplication.shouldWriteMessageForPackage(mAppInfo.packageName, context)) {
+                Log.e(TAG,"mIsText = [" + mIsText + "], mPersistMessage = [" + mPersistMessage
+                                + "],SmsApplication.shouldWriteMessageForPackage(mAppInfo.packageName, context) = ["
+                                + SmsApplication.shouldWriteMessageForPackage(
+                                        mAppInfo.packageName, context) + "]");
                 return null;
             }
+            final String PACKNAME_SMILPLAYER = "com.android.messaging.smilplayer";
+            if (mAppInfo.packageName != null
+                    && mAppInfo.packageName.equals(PACKNAME_SMILPLAYER)) {
+                Log.d(TAG,"mAppInfo.packageName equals com.android.messaging.smilplayer, will return directly");
+                return null;
+            }
+            // add for bug 597785 end
+
+            if(mAppInfo.sharedUserId != null && mDestAddress != null) {
+                if(mAppInfo.sharedUserId.equals("android.uid.system")
+                 && mDestAddress.equals(CTCC_DM_SERVER_NUMBER)){
+                    Log.d(TAG,"mDestAddress equals ctcc sms self reg server: " + CTCC_DM_SERVER_NUMBER + ", will return directly");
+                    return null;
+                }
+            }
+
             Rlog.d(TAG, "Persist SMS into "
                     + (messageType == Sms.MESSAGE_TYPE_FAILED ? "FAILED" : "SENT"));
             final ContentValues values = new ContentValues();
@@ -1742,8 +1836,90 @@ public abstract class SMSDispatcher extends Handler {
                     Rlog.e(TAG, "Failed to send result");
                 }
             }
-        }
+            /* UNISOC: modify for bug1000724 @{ */
+            if (error == RESULT_ERROR_FDN_CHECK_FAILURE) {
+                new AsyncTask<Void, Void, Void>() {
+                    @Override
+                    protected Void doInBackground(Void... params) {
+                       try {
+                           smscStr = SmsManagerEx.getDefault().getSmscForSubscriber(mSubId);
+                       } catch (RemoteException ex) {
+                       }
+                        isInFdnListBool = isInFdnList(context, mDestAddress, mSubId);
+                        android.util.Log.d(TAG, "onFailed: isInFdnListBool-- " + isInFdnListBool+"-smscStr--"+smscStr+"mDestAddress"+mDestAddress);
+                        return null;
+                    }
+                    @Override
+                    protected void onPostExecute(Void result) {
+                        if (!TextUtils.isEmpty(smscStr) && isInFdnListBool) {
+                                              showFdnDialog(context,smscStr);
+                                             Log.d(TAG,"sms show smsc fdn_check_failure");
+               
+                        }else{
 
+                                                showFdnDialog(context,mDestAddress);
+                                                 Log.d(TAG,"sms show dest fdn_check_failure");
+                          }
+                    }
+                }.execute((Void) null);
+
+
+            }
+     
+        }
+// UNISOC: modify for bug1147492 
+     private void showFdnDialog(Context context, String number){
+      Log.d(TAG,"showFdnDialog");
+            final AlertDialog  builder = new AlertDialog.Builder(context).setMessage(context.getString(R.string.fdn_send_fail_add_number,number))
+                .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                         dialog.dismiss();
+                    }
+                })
+                .setOnDismissListener(new DialogInterface.OnDismissListener() {
+                    @Override
+                    public void onDismiss(DialogInterface dialog) {
+                        dialog.dismiss();
+                    }
+                }).create();
+        builder.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_DIALOG);
+        builder.show();
+     }
+        /* UNISOC: modify for bug1000724 @{ */
+        private String smscStr = "";
+        private  boolean isInFdnListBool;
+        private static final String FDN_CONTENT_URI = "content://icc/fdn/subId/";
+        private static final String[] FDN_SELECT_PROJECTION = new String[]{
+                "name", "number"
+        };
+     private static final int FDN_NUMBER_COLUMN = 1;
+        /* UNISOC: modify for bug1000724 @{ */
+        private boolean isInFdnList(Context context, String number, int subId) {
+            if (TextUtils.isEmpty(number)) {
+                return false;
+            }
+            String compareNumber = "";
+            String formatNumber = number.replace(" ", "");
+
+            Cursor cursor = context.getContentResolver().query(Uri.parse(FDN_CONTENT_URI + subId),
+                    FDN_SELECT_PROJECTION, null, null, null);
+
+            try {
+                while (cursor != null && cursor.moveToNext()) {
+                    compareNumber = cursor.getString(FDN_NUMBER_COLUMN);
+                    if (compareNumber != null && compareNumber.equals(formatNumber)) {
+                        return true;
+                    }
+                }
+            } finally {
+                if (cursor != null) {
+                    cursor.close();
+                }
+            }
+            return false;
+        }
+        /* @} */
         /**
          * Handle the sent of a single part message or a part of a multipart message
          *
@@ -2016,6 +2192,23 @@ public abstract class SMSDispatcher extends Handler {
         return mSmsDispatchersController.isCdmaMo();
     }
 
+    //add for bug 642139 begin
+    private final String SEND_RETRIE_TIME = "message_send_retries";
+    private int getMaxSendRetries() {
+        //int smsMaxRetries =Integer.valueOf(SystemProperties.get(SEND_RETRIE_TIME,"-1"));
+        final String retryKey = Settings.Global.getString(mContext.getContentResolver(),SEND_RETRIE_TIME);
+        int retryTime = MAX_SEND_RETRIES;
+        if(retryKey != null){
+            try{
+                retryTime = Integer.parseInt(retryKey);
+            }catch (NumberFormatException e){
+                e.printStackTrace();
+            }
+        }
+        Rlog.d(TAG, "smsMaxRetries retryKey/retryTime is:"+ retryKey + "/" + retryTime);
+        return retryTime;
+    }
+    //add for bug 642139 end
     private boolean isAscii7bitSupportedForLongMessage() {
         //TODO: Do not rely on calling identity here, we should store UID & clear identity earlier.
         long token = Binder.clearCallingIdentity();
@@ -2032,5 +2225,16 @@ public abstract class SMSDispatcher extends Handler {
         } finally {
             Binder.restoreCallingIdentity(token);
         }
+    }
+
+    private int getRelativeValidityPeriod(final int validityPeriod){// by sprd
+        int userDefinedPeriod = validityPeriod;
+        try {
+            final SmsManagerEx smsManagerEx = SmsManagerEx.getDefault();
+            userDefinedPeriod = Integer.parseInt(smsManagerEx.getRelativeValidityPeriod(mContext, mPhone.getSubId()));
+        } catch (NumberFormatException e) {
+            e.printStackTrace();
+        }
+        return userDefinedPeriod;
     }
 }

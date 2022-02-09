@@ -37,6 +37,9 @@ public class ComprehensionTlv {
     private int mLength;
     private int mValueIndex;
     private byte[] mRawValue;
+    /*UNISOC: Feature bug for Stk Feature @{*/
+    private static CommandDetails mCmdDet;
+    /*UNISOC: @}*/
 
     /**
      * Constructor. Private on purpose. Use
@@ -95,10 +98,23 @@ public class ComprehensionTlv {
         ArrayList<ComprehensionTlv> items = new ArrayList<ComprehensionTlv>();
         int endIndex = data.length;
         while (startIndex < endIndex) {
+            /*UNISOC: Feature bug for Stk Feature @{*/
+            if ((endIndex - 1) == startIndex) {
+                CatLog.d(LOG_TAG, "decodeMany: no ctlv, stop decoding");
+                break;
+            }
+            /*UNISOC: @}*/
             ComprehensionTlv ctlv = ComprehensionTlv.decode(data, startIndex);
             if (ctlv != null) {
                 items.add(ctlv);
                 startIndex = ctlv.mValueIndex + ctlv.mLength;
+                /*UNISOC: Feature bug for Stk Feature @{*/
+                if (startIndex > endIndex) {
+                    if (endIndex - ctlv.mValueIndex >= 0) {
+                        ctlv.mLength = endIndex - ctlv.mValueIndex;
+                    }
+                }
+                /*UNISOC: @}*/
             } else {
                 CatLog.d(LOG_TAG, "decodeMany: ctlv is null, stop decoding");
                 break;
@@ -128,9 +144,15 @@ public class ComprehensionTlv {
             int temp = data[curIndex++] & 0xff;
             switch (temp) {
             case 0:
+                /*UNISOC: Feature bug for Stk Feature @{*/
+                //show STK with Ghana MTN simcard
+                tag = 0;
+                cr = false;
+                break;
+                /*UNISOC: @}*/
             case 0xff:
             case 0x80:
-                Rlog.d("CAT     ", "decode: unexpected first tag byte=" + Integer.toHexString(temp) +
+                CatLog.d(LOG_TAG, "decode: unexpected first tag byte=" + Integer.toHexString(temp) +
                         ", startIndex=" + startIndex + " curIndex=" + curIndex +
                         " endIndex=" + endIndex);
                 // Return null which will stop decoding, this has occurred
@@ -144,7 +166,19 @@ public class ComprehensionTlv {
                 tag &= ~0x8000;
                 curIndex += 2;
                 break;
-
+            /*UNISOC: Feature bug for Stk Feature @{*/
+            case 0x81:
+                tag = temp;
+                cr = (tag & 0x80) != 0;
+                tag &= ~0x80;
+                try {
+                    ComprehensionTlv.setCommandDetails(ComprehensionTlv.retrieveCommandDetails(data, curIndex, cr));
+                } catch (ResultException e) {
+                    CatLog.d(LOG_TAG,"retrieveCommandDetails fail");
+                    ComprehensionTlv.setCommandDetails(null);
+                }
+                break;
+            /*UNISOC: @}*/
             default: // tag is in single-byte format
                 tag = temp;
                 cr = (tag & 0x80) != 0;
@@ -205,4 +239,29 @@ public class ComprehensionTlv {
                     " curIndex=" + curIndex + " endIndex=" + endIndex);
         }
     }
+
+    /*UNISOC: Feature bug for Stk Feature @{*/
+    private static CommandDetails retrieveCommandDetails (byte[] data, int curIndex, boolean cr)
+            throws ResultException {
+        CommandDetails cmdDet = new CommandDetails();
+        try {
+            cmdDet.compRequired = cr;
+            cmdDet.commandNumber = data[curIndex + 1] & 0xff;
+            cmdDet.typeOfCommand = data[curIndex + 2] & 0xff;
+            cmdDet.commandQualifier = data[curIndex + 3] & 0xff;
+            return cmdDet;
+        } catch (IndexOutOfBoundsException e) {
+            throw new ResultException(ResultCode.CMD_DATA_NOT_UNDERSTOOD);
+        }
+    }
+
+    public static void setCommandDetails(CommandDetails cmdDet) {
+        mCmdDet = cmdDet;
+        CatLog.d(LOG_TAG, " mCmdDet = " + mCmdDet);
+    }
+
+    public static CommandDetails getCommandDetails() {
+        return mCmdDet;
+    }
+    /*UNISOC: @}*/
 }

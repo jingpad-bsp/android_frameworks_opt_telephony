@@ -668,4 +668,12 @@ public abstract class IntRangeManager {
      * @return true if successful, false otherwise
      */
     protected abstract boolean finishUpdate();
+
+  //clear the IntRange so that the CB can set channels again. bug 489257 start
+    public synchronized void clearAllRanges() {
+        if (mRanges != null) {
+            mRanges.clear();
+        }
+    }
+  //clear the IntRange so that the CB can set channels again. bug 489257 end
 }

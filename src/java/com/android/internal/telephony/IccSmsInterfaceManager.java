@@ -56,11 +56,23 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import android.telephony.TelephonyManager;
+//489223 begin
+import android.content.ContentResolver;
+import android.content.ContentValues;
+import android.content.IContentProvider;
+import android.database.sqlite.SQLiteDatabase;
+import android.net.Uri;
+import android.telephony.SmsManager;
+import android.telephony.SmsMessage;
+import android.database.sqlite.SqliteWrapper;
+import android.text.TextUtils;
+//489223 end
 /**
  * IccSmsInterfaceManager to provide an inter-process communication to
  * access Sms in Icc.
  */
-public class IccSmsInterfaceManager {
+public class IccSmsInterfaceManager extends AbsIccSmsInterfaceManager {
     static final String LOG_TAG = "IccSmsInterfaceManager";
     static final boolean DBG = true;
 
@@ -1322,4 +1334,35 @@ public class IccSmsInterfaceManager {
         mDispatchersController.dump(fd, pw, args);
         pw.flush();
     }
+   //add for customed channel or language set ATCommand bug 489257 start
+    synchronized  public boolean setCellBroadcastSmsConfig(int[] configValuesArray) {
+        //implement this function here
+        int count = 5 ;
+        int j =0;
+        SmsBroadcastConfigInfo[]  config = new SmsBroadcastConfigInfo[configValuesArray.length/count];
+        for(int i= 0;i<configValuesArray.length;i+=count){
+            config[j] =  new  SmsBroadcastConfigInfo(
+                    configValuesArray[i],
+                    configValuesArray[i+1],
+                    configValuesArray[i+2],
+                    configValuesArray[i+3],
+                    (configValuesArray[i+4]==0)
+                  );
+            j++;
+        }
+        log("setCellBroadcastConfig! config.length"+config.length);
+
+        for(int i=0; i<config.length; i++){
+            log("setCellBroadcastConfig! config. "+config[i].toString());
+        }
+        boolean success = setCellBroadcastConfig(config);
+
+        //if disabled channel_id=1000 means clear all the settings about channels or languages
+        if (configValuesArray[0]==1000 && configValuesArray[4]==1) {
+            log("set AT+CSCB=0, 1000; clear channels store in mIntRange.");
+            mCellBroadcastRangeManager.clearAllRanges();
+        }
+        return success;
+    }
+  //add for customed channel or language set ATCommand bug 489257 end
 }

@@ -46,6 +46,8 @@ import android.os.Registrant;
 import android.os.RegistrantList;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.SystemProperties;
+import android.telephony.AccessNetworkConstants;
 import android.telephony.PhoneCapability;
 import android.telephony.PhoneStateListener;
 import android.telephony.Rlog;
@@ -56,6 +58,7 @@ import android.util.LocalLog;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.dataconnection.DcRequest;
+import com.android.internal.telephony.dataconnection.DcTracker;
 import com.android.internal.telephony.metrics.TelephonyMetrics;
 import com.android.internal.telephony.nano.TelephonyProto.TelephonyEvent;
 import com.android.internal.telephony.nano.TelephonyProto.TelephonyEvent.DataSwitch;
@@ -150,6 +153,7 @@ public class PhoneSwitcher extends Handler {
     }
 
     private final List<DcRequest> mPrioritizedDcRequests = new ArrayList<DcRequest>();
+    private final List<DcRequest> mPendingReq = new ArrayList<DcRequest>();
     private final RegistrantList mActivePhoneRegistrants;
     private final SubscriptionController mSubscriptionController;
     private final int[] mPhoneSubscriptions;
@@ -171,6 +175,7 @@ public class PhoneSwitcher extends Handler {
     @UnsupportedAppUsage
     private int mMaxActivePhones;
     private static PhoneSwitcher sPhoneSwitcher = null;
+    private boolean[] mPhoneCallStateIdle;
 
     // Which primary (non-opportunistic) subscription is set as data subscription among all primary
     // subscriptions. This value usually comes from user setting, and it's the subscription used for
@@ -305,6 +310,7 @@ public class PhoneSwitcher extends Handler {
         mActivePhoneRegistrants = null;
         mNumPhones = numPhones;
         mPhoneSubscriptions = new int[numPhones];
+        mPhoneCallStateIdle = new boolean[numPhones];
         mRadioConfig = RadioConfig.getInstance(mContext);
         mPhoneStateListener = new PhoneStateListener(looper) {
             public void onPhoneCapabilityChanged(PhoneCapability capability) {
@@ -339,6 +345,7 @@ public class PhoneSwitcher extends Handler {
         mNumPhones = numPhones;
         mPhones = phones;
         mPhoneSubscriptions = new int[numPhones];
+        mPhoneCallStateIdle = new boolean[numPhones];
         mMaxActivePhones = maxActivePhones;
         mLocalLog = new LocalLog(MAX_LOCAL_LOG_LINES);
 
@@ -370,6 +377,7 @@ public class PhoneSwitcher extends Handler {
                 mPhones[i].getDataEnabledSettings().registerForDataEnabledChanged(
                         this, EVENT_DATA_ENABLED_CHANGED, null);
             }
+            mPhoneCallStateIdle[i] = true;
         }
 
         mCommandsInterfaces = cis;
@@ -493,6 +501,16 @@ public class PhoneSwitcher extends Handler {
                 break;
             }
             case EVENT_PRECISE_CALL_STATE_CHANGED: {
+                log("EVENT_PRECISE_CALL_STATE_CHANGED");
+                Phone phone = (Phone)((AsyncResult) msg.obj).result;
+                if (phone != null) {
+                    if (isCallIdle(phone) && !mPhoneCallStateIdle[phone.getPhoneId()]) {
+                        log("call end, process pending request");
+                        evalPendingRequest();
+                    }
+                    mPhoneCallStateIdle[phone.getPhoneId()] = isCallIdle(phone);
+                }
+
                 // If the phoneId in voice call didn't change, do nothing.
                 if (!isPhoneInVoiceCallChanged()) break;
 
@@ -542,6 +560,13 @@ public class PhoneSwitcher extends Handler {
                 } else if (!commandSuccess) {
                     int phoneId = (int) ar.userObj;
                     log("Modem command failed. with exception " + ar.exception);
+                    Phone phone = findPhoneById(phoneId);
+                    if (phone != null){
+                        DcTracker dct = phone.getDcTracker(AccessNetworkConstants.TRANSPORT_TYPE_WWAN);
+                        if (dct.getPsRejectProp()){
+                            break;
+                        }
+                    }
                     sendMessageDelayed(Message.obtain(this, EVENT_MODEM_COMMAND_RETRY,
                             phoneId), MODEM_COMMAND_RETRY_PERIOD_MS);
                 }
@@ -656,22 +681,64 @@ public class PhoneSwitcher extends Handler {
         }
     }
 
+    boolean isMmsRequest(NetworkRequest networkRequest){
+        return networkRequest.networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_MMS);
+    }
+
+    private void evalPendingRequest(){
+        Collections.sort(mPendingReq);
+        for(int i=0; i<mPendingReq.size(); i++) {
+            onRequestNetwork(mPendingReq.get(i).networkRequest);
+        }
+    }
+
+    private boolean isOtherPhoneCalling(int requestPhoneId) {
+        for (Phone p : mPhones) {
+            if (p.getPhoneId() != requestPhoneId && (!isCallIdle(p) || !isCallIdle(p.getImsPhone()))) {
+                Rlog.d(LOG_TAG, "Phone " + p.getPhoneId() + " is in call");
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void onRequestNetwork(NetworkRequest networkRequest) {
         final DcRequest dcRequest = new DcRequest(networkRequest, mContext);
         if (!mPrioritizedDcRequests.contains(dcRequest)) {
+            int phoneIdForRequest = phoneIdForRequest(networkRequest);
+            if (SubscriptionManager.isValidPhoneId(phoneIdForRequest) &&
+                    isOtherPhoneCalling(phoneIdForRequest)) {
+                if (!mPendingReq.contains(dcRequest)) {
+                    log("pending network request during other phone in call: dcRequest " + dcRequest);
+                    mPendingReq.add(dcRequest);
+                } else {
+                    log ("mPendingReq already have request" + dcRequest);
+                }
+                return;
+            }
             collectRequestNetworkMetrics(networkRequest);
             mPrioritizedDcRequests.add(dcRequest);
             Collections.sort(mPrioritizedDcRequests);
             onEvaluate(REQUESTS_CHANGED, "netRequest");
+            /*UNISOC: for 731286 @{*/
+            if (isMmsRequest(networkRequest)) {
+                SystemProperties.set("ril.mms.active", "1");
+            }
+            /* @} */
         }
     }
 
     private void onReleaseNetwork(NetworkRequest networkRequest) {
         final DcRequest dcRequest = new DcRequest(networkRequest, mContext);
-
+        mPendingReq.remove(dcRequest);
         if (mPrioritizedDcRequests.remove(dcRequest)) {
             onEvaluate(REQUESTS_CHANGED, "netReleased");
             collectReleaseNetworkMetrics(networkRequest);
+            /*UNISOC: for 731286 @{*/
+            if (isMmsRequest(networkRequest)) {
+                SystemProperties.set("ril.mms.active", "0");
+            }
+            /* @} */
         }
     }
 
@@ -1243,6 +1310,19 @@ public class PhoneSwitcher extends Handler {
 
         return (phone.getForegroundCall().getState() == Call.State.ACTIVE
                 || phone.getForegroundCall().getState() == Call.State.ALERTING);
+    }
+
+    private boolean isCallIdle(Phone phone){
+        if (phone == null) {
+            return true;
+        }
+
+        return ((phone.getForegroundCall().getState() == Call.State.IDLE ||
+                phone.getForegroundCall().getState() == Call.State.DISCONNECTED) &&
+                (phone.getBackgroundCall().getState() == Call.State.IDLE ||
+                phone.getBackgroundCall().getState() == Call.State.DISCONNECTED) &&
+                (phone.getRingingCall().getState() == Call.State.IDLE ||
+                phone.getRingingCall().getState() == Call.State.DISCONNECTED));
     }
 
     private void updateHalCommandToUse() {

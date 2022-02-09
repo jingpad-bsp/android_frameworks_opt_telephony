@@ -67,11 +67,21 @@ public class CatCmdMessage implements Parcelable {
 
     public final class SetupEventListConstants {
         // Event values in SETUP_EVENT_LIST Proactive Command as per ETSI 102.223
+        /*UNISOC: Feature for Event Download Command @{*/
+        public static final int MT_CALL_EVENT                = 0x00;
+        public static final int CALL_CONNECTED_EVENT         = 0x01;
+        public static final int CALL_DISCONNECTED_EVENT      = 0x02;
+        public static final int LOCATION_STATUS_EVENT        = 0x03;
+        /*UNISOC: @}*/
         public static final int USER_ACTIVITY_EVENT          = 0x04;
         public static final int IDLE_SCREEN_AVAILABLE_EVENT  = 0x05;
         public static final int LANGUAGE_SELECTION_EVENT     = 0x07;
         public static final int BROWSER_TERMINATION_EVENT    = 0x08;
         public static final int BROWSING_STATUS_EVENT        = 0x0F;
+        /*UNISOC: Feature for Event Download Command  @{*/
+        public static final int DATA_AVAILABLE_EVENT         = 0x09;
+        public static final int CHANNEL_STATUS_EVENT         = 0x0A;
+        /*UNISOC: @}*/
     }
 
     public final class BrowserTerminationCauses {
@@ -259,4 +269,16 @@ public class CatCmdMessage implements Parcelable {
     public boolean hasIconLoadFailed() {
         return mLoadIconFailed;
     }
+
+    /*UNISOC: Feature for REFRESH function & SET_UP_CALL @{*/
+    @UnsupportedAppUsage
+    public CommandDetails getCmdDet() {
+        return mCmdDet;
+    }
+
+    @UnsupportedAppUsage
+    public int getCommandQualifier() {
+        return mCmdDet.commandQualifier;
+    }
+    /*UNISOC: @}*/
 }

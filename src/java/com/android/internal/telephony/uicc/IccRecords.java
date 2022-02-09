@@ -169,7 +169,9 @@ public abstract class IccRecords extends Handler implements IccConstants {
 
     protected String[] mEhplmns;
     protected String[] mFplmns;
-
+    /*UNISOC: BUG1131047 for test usim @{ */
+    protected String mEfad = null;
+    /*UNISOC: @} */
     @UnsupportedAppUsage
     private final Object mLock = new Object();
 
@@ -356,9 +358,10 @@ public abstract class IccRecords extends Handler implements IccConstants {
     public String getIccId() {
         if (mCarrierTestOverride.isInTestMode() && mCarrierTestOverride.getFakeIccid() != null) {
             return mCarrierTestOverride.getFakeIccid();
-        } else {
-            return mIccId;
+        } else if (mIccId == null) {
+            return getExtraIccId();
         }
+        return mIccId;
     }
 
     /**
@@ -366,6 +369,9 @@ public abstract class IccRecords extends Handler implements IccConstants {
      * @return full ICC ID including hex digits
      */
     public String getFullIccId() {
+        if (mFullIccId == null) {
+            return getExtraIccId();
+        }
         return mFullIccId;
     }
 
@@ -959,6 +965,9 @@ public abstract class IccRecords extends Handler implements IccConstants {
         if (!ArrayUtils.isEmpty(spdi)) {
             hplmns = ArrayUtils.concatElements(String.class, hplmns, spdi);
         }
+
+        //UNISOC:Modify for Bug1146431,if hplmns don't contain hplmn, we need to add hplmn to hplmns,
+        hplmns = ArrayUtils.appendElement(String.class, hplmns, hplmn);
         return hplmns;
     }
 
@@ -1284,5 +1293,23 @@ public abstract class IccRecords extends Handler implements IccConstants {
         public String toString() {
             return "{ fullName = " + fullName + " shortName = " + shortName + " }";
         }
+    }
+
+    /*UNISOC: BUG1131047 for test usim @{ */
+    public boolean isTestUsim() {
+        return false;
+    };
+    /*UNISOC: @} */
+
+    // Get iccId from UiccCard
+    private String getExtraIccId() {
+        UiccController uiccContrller = UiccController.getInstance();
+        if (mParentApp != null) {
+            UiccCard uiccCard = uiccContrller.getUiccCard(mParentApp.getPhoneId());
+            if (uiccCard != null) {
+                return uiccCard.getIccId();
+            }
+        }
+        return null;
     }
 }

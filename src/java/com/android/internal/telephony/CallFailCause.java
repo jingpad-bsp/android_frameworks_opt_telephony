@@ -170,7 +170,11 @@ public interface CallFailCause {
 
     // Access Blocked by CDMA Network.
     int CDMA_ACCESS_BLOCKED            = 1009;
+    //UNISOC:add the feature for bug969605
+    int REDIAL_WHEN_IMS_REGISTERING = 61442;
+
+    //UNISOC:add the feature for bug839181
+    int ANSWERED_ELSEWHERE = 61441;
 
     int ERROR_UNSPECIFIED = 0xffff;
-
 }

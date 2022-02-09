@@ -35,6 +35,7 @@ import com.android.internal.telephony.SmsStorageMonitor;
 import com.android.internal.telephony.TelephonyComponentFactory;
 import com.android.internal.telephony.WspTypeDecoder;
 import com.android.internal.telephony.cdma.sms.SmsEnvelope;
+import com.android.internal.util.BitwiseInputStream;
 import com.android.internal.util.HexDump;
 
 import java.util.Arrays;
@@ -53,6 +54,7 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
     private final boolean mCheckForDuplicatePortsInOmadmWapPush = Resources.getSystem().getBoolean(
             com.android.internal.R.bool.config_duplicate_port_omadm_wappush);
 
+   static private final int TELESERVICE_CARRIER_CTCC_DMSMS  = 0xFDED;//for ctcc dm sms
     /**
      * Create a new inbound SMS handler for CDMA.
      */
@@ -153,9 +155,12 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
                 return Intents.RESULT_SMS_HANDLED;
 
             case SmsEnvelope.TELESERVICE_WAP:
+            // Unisoc add for carrier specific WAP TeleserviceId
+            case SmsEnvelope.TELESERVICE_CARRIER_CTCC_WAP:
                 // handled below, after storage check
                 break;
-
+           case TELESERVICE_CARRIER_CTCC_DMSMS://for ctcc dm
+                break;
             default:
                 loge("unsupported teleservice 0x" + Integer.toHexString(teleService));
                 return Intents.RESULT_SMS_UNSUPPORTED;
@@ -167,6 +172,24 @@ public class CdmaInboundSmsHandler extends InboundSmsHandler {
             // (See C.S0015-B v2.0 for a description of "Immediate Display"
             // messages, which we represent as CLASS_0.)
             return Intents.RESULT_SMS_OUT_OF_MEMORY;
+        }
+
+        // Unisoc add for CTCC WAP
+        if (SmsEnvelope.TELESERVICE_CARRIER_CTCC_WAP == teleService) {
+            try {
+                BitwiseInputStream inputStream = new BitwiseInputStream(sms.getUserData());
+                inputStream.skip(69);
+                int length = inputStream.available() / 8;
+                byte[] ctccUserData = new byte[length];
+                for(int i = 0; i < length; i++) {
+                    ctccUserData[i] = (byte) inputStream.read(8);
+                }
+                return processCdmaWapPdu(ctccUserData, sms.mMessageRef,
+                        sms.getOriginatingAddress(), sms.getDisplayOriginatingAddress(),
+                        sms.getTimestampMillis());
+            } catch (BitwiseInputStream.AccessException ex) {
+                loge("BitwiseInputStream.AccessException when process carrier specific WAP.");
+            }
         }
 
         if (SmsEnvelope.TELESERVICE_WAP == teleService) {

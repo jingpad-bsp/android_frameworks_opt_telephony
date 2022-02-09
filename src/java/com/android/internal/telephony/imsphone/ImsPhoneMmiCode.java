@@ -37,6 +37,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.os.ResultReceiver;
+import android.telephony.CarrierConfigManager;
+import android.telephony.CarrierConfigManagerEx;
 import android.telephony.PhoneNumberUtils;
 import android.telephony.Rlog;
 import android.telephony.ims.ImsCallForwardInfo;
@@ -55,11 +57,13 @@ import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.MmiCode;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.uicc.IccRecords;
+import com.android.internal.telephony.GsmCdmaPhone;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import android.os.SystemProperties;
 
 /**
  * The motto for this file is:
@@ -218,6 +222,13 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
     private static final int MATCH_GROUP_PWD_CONFIRM = 11;
     private static final int MATCH_GROUP_DIALING_NUMBER = 12;
     static private String[] sTwoDigitNumberPattern;
+
+    /* UNISOC: add for bug894041 @{ */
+    private static final String VIDEO_CF_SUB_ID = "video_cf_flag_with_subid";
+    private static final String REFRESH_VIDEO_CF_NOTIFICATION_ACTION =
+            "android.intent.action.REFRESH_VIDEO_CF_NOTIFICATION";
+    private static final String VIDEO_CF_STATUS = "video_cf_status";
+    /* @} */
 
     //***** Public Class methods
 
@@ -731,6 +742,11 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
     @UnsupportedAppUsage
     boolean
     isSupportedOverImsPhone() {
+        /* SPRD: add for VoWifi @{ */
+        if (shouldSendUssdOnIms()) {
+            return true;
+        }
+        /* @} */
         if (isShortCode()) return true;
         else if (isServiceCodeCallForwarding(mSc)
                 || isServiceCodeCallBarring(mSc)
@@ -743,7 +759,9 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
                 || (mSc != null && mSc.equals(SC_BAICa))) {
 
             try {
-                int serviceClass = siToServiceClass(mSib);
+                //add for UNISOC  BUG 1101040
+                int serviceClass = getCarrierServiceClass() !=  SERVICE_CLASS_NONE ? getCarrierServiceClass() :
+                        siToServiceClass(mSib);
                 if (serviceClass != SERVICE_CLASS_NONE
                         && serviceClass != SERVICE_CLASS_VOICE
                         && serviceClass != (SERVICE_CLASS_PACKET
@@ -762,6 +780,38 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
 
         return false;
     }
+
+    /* SPRD: add for VoWifi  & 757327 @{ */
+    public boolean shouldSendUssdOnIms() {
+        Rlog.d(LOG_TAG, "shouldSendUssdOnIms isVoWiFiRegistered : " + mPhone.isWifiCallingEnabled()
+                + "supportOverVoWifi ： "
+                + supportOverVoWifi(mPhone.getSubId()));
+        return mPhone.isWifiCallingEnabled() && supportOverVoWifi(mPhone.getSubId()) ;
+    }
+
+    private boolean supportOverVoWifi(int subId) {
+        CarrierConfigManager carrierMgr = (CarrierConfigManager) mPhone.getContext()
+                .getSystemService(Context.CARRIER_CONFIG_SERVICE);
+        if ((carrierMgr != null)
+                && (carrierMgr.getConfigForSubId(subId) != null)) {
+            return carrierMgr.getConfigForSubId(subId).getBoolean(
+                    CarrierConfigManagerEx.KEY_SUPPORT_SEND_USSD_OVER_VOWIFI);
+        }
+        return true;
+    }/*@}*/
+
+    /* UNISOC: add for BUG 1101040 @{*/
+    public int getCarrierServiceClass() {
+        int value = SERVICE_CLASS_NONE;
+        CarrierConfigManager carrierMgr = (CarrierConfigManager) mPhone.getContext()
+                .getSystemService(Context.CARRIER_CONFIG_SERVICE);
+        if (carrierMgr != null  && carrierMgr.getConfigForSubId(mPhone.getSubId()) != null) {
+            return carrierMgr.getConfigForSubId(mPhone.getSubId()).getInt(
+                    CarrierConfigManagerEx.KEY_CONFIF_SS_MMI_SERVICECLASS);
+        }
+        return value;
+    }
+    /*@}*/
 
     /*
      * The below actions are IMS/Volte CallBarring actions.We have not defined
@@ -794,7 +844,12 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
         try {
             if (isShortCode()) {
                 Rlog.d(LOG_TAG, "processCode: isShortCode");
-
+                /* SPRD: add for VoWifi @{ */
+                if(shouldSendUssdOnIms()) {
+                    sendUssd(mDialingNumber);
+                    return;
+                }
+                /* @} */
                 // These just get treated as USSD.
                 Rlog.d(LOG_TAG, "processCode: Sending short code '"
                        + mDialingNumber + "' over CS pipe.");
@@ -804,10 +859,15 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
 
                 String dialingNumber = mSia;
                 int reason = scToCallForwardReason(mSc);
-                int serviceClass = siToServiceClass(mSib);
+                //add for UNISOC  BUG 1101040
+                int serviceClass = getCarrierServiceClass() != SERVICE_CLASS_NONE ? getCarrierServiceClass() :
+                        siToServiceClass(mSib);
                 int time = siToTime(mSic);
-
                 if (isInterrogate()) {
+                    //add for unisoc 1535263
+                    if (mPhone.getDefaultPhone() instanceof GsmCdmaPhone) {
+                        ((GsmCdmaPhone) (mPhone.getDefaultPhone())).setServiceClass(serviceClass);
+                    }
                     mPhone.getCallForwardingOption(reason,
                             obtainMessage(EVENT_QUERY_CF_COMPLETE, this));
                 } else {
@@ -857,8 +917,9 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
 
                 String password = mSia;
                 String facility = scToBarringFacility(mSc);
-                int serviceClass = siToServiceClass(mSib);
-
+                //add for UNISOC  BUG 1101040
+                int serviceClass = getCarrierServiceClass() != SERVICE_CLASS_NONE ? getCarrierServiceClass() :
+                        siToServiceClass(mSib);
                 if (isInterrogate()) {
                     mPhone.getCallBarring(facility,
                             obtainMessage(EVENT_SUPP_SVC_QUERY_COMPLETE, this), serviceClass);
@@ -998,8 +1059,20 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
                 }
             } else if (mSc != null && mSc.equals(SC_WAIT)) {
                 // sia = basic service group
-                int serviceClass = siToServiceClass(mSib);
-
+                //add for UNISOC  BUG 1101040
+                int serviceClass = getCarrierServiceClass() !=  SERVICE_CLASS_NONE ? getCarrierServiceClass() :
+                        siToServiceClass(mSib);
+                 //UNISOC: add for BUG1147258
+                if(serviceClass == SERVICE_CLASS_NONE) {
+                    serviceClass = CommandsInterface.SERVICE_CLASS_VOICE;
+                    CarrierConfigManager carrierMgr = (CarrierConfigManager) mContext
+                            .getSystemService(Context.CARRIER_CONFIG_SERVICE);
+                    if ((carrierMgr != null)
+                            && (carrierMgr.getConfigForSubId(mPhone.getSubId()) != null)) {
+                        serviceClass = carrierMgr.getConfigForSubId(mPhone.getSubId()).getInt(
+                                CarrierConfigManager.KEY_CALL_WAITING_SERVICE_CLASS_INT);
+                    }
+                }
                 if (isActivate() || isDeactivate()) {
                     mPhone.setCallWaiting(isActivate(), serviceClass,
                             obtainMessage(EVENT_SET_COMPLETE, this));
@@ -1011,6 +1084,12 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
             } else if (mPoundString != null) {
                 // We'll normally send USSD over the CS pipe, but if it happens that the CS phone
                 // is out of service, we'll just try over IMS instead.
+                /* SPRD: add for VoWifi @{ */
+                if(shouldSendUssdOnIms()) {
+                    sendUssd(mPoundString);
+                    return;
+                }
+                /* @} */
                 if (mPhone.getDefaultPhone().getServiceStateTracker().mSS.getState()
                         == STATE_IN_SERVICE) {
                     Rlog.i(LOG_TAG, "processCode: Sending ussd string '"
@@ -1117,6 +1196,14 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
                         mPhone.setVoiceCallForwardingFlag(1, cffEnabled, mDialingNumber);
                     }
                 }
+                /* UNISOC: add for bug894041 & 894331, 966397 @{ */
+                if ((ar.exception == null) && (isErasure() || isDeactivate())) {
+                    Rlog.d(LOG_TAG, "erase video call forward sc : " + mSc);
+                    if (SC_CFU.equals(mSc) || SC_CF_All.equals(mSc)) {
+                        dismissVideoCFNotification();
+                    }
+                }
+                                /* @} */
 
                 onSetComplete(msg, ar);
                 break;
@@ -1241,7 +1328,7 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
             if (isServiceCodeCallBarring(mSc)) {
                 return mContext.getText(com.android.internal.R.string.BaMmi);
             } else if (isServiceCodeCallForwarding(mSc)) {
-                return mContext.getText(com.android.internal.R.string.CfMmi);
+                return getCfType(mSc);//UNISOC: porting for bug1073300
             } else if (mSc.equals(SC_PWD)) {
                 return mContext.getText(com.android.internal.R.string.PwdMmi);
             } else if (mSc.equals(SC_WAIT)) {
@@ -1263,6 +1350,34 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
 
         return "";
     }
+
+    /*UNISOC: porting for bug1073300 @{ */
+    public CharSequence getCfType(String sc) {
+        int resId = com.android.internal.R.string.CfMmi;
+        boolean needShowType = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_add_mmi_cf_title_type);
+        Rlog.i(LOG_TAG, "getScString needShowType " + needShowType);
+        if (needShowType) {
+            switch (sc) {
+                case SC_CFU:
+                    resId = com.android.internal.R.string.cfmmiuncondition;
+                    break;
+                case SC_CFB:
+                    resId = com.android.internal.R.string.cfmmibusy;
+                    break;
+                case SC_CFNRy:
+                    resId = com.android.internal.R.string.cfmminoreply;
+                    break;
+                case SC_CFNR:
+                    resId = com.android.internal.R.string.cfmminoreach;
+                    break;
+                default:
+                    break;
+            }
+        }
+        return mContext.getText(resId);
+    }
+    /* @} */
 
     private void
     onSetComplete(Message msg, AsyncResult ar){
@@ -1300,7 +1415,15 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
             // Record CLIR setting
             if (mSc.equals(SC_CLIR)) {
                 mPhone.saveClirSetting(CommandsInterface.CLIR_INVOCATION);
+                //add for unisoc 1189298,1237284 save clir by property
+                SystemProperties.set("gsm.ss.clir", String.valueOf(CommandsInterface.CLIR_INVOCATION));
             }
+            /* UNISOC: add for bug 969993 @{ */
+            if (SC_WAIT.equals(mSc)) {
+                Rlog.d(LOG_TAG, "set cw value for vowifi isActivate()");
+                SystemProperties.set("gsm.ss.call_waiting", "true");
+            }
+            /* @} */
         } else if (isDeactivate()) {
             mState = State.COMPLETE;
             sb.append(mContext.getText(
@@ -1308,7 +1431,15 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
             // Record CLIR setting
             if (mSc.equals(SC_CLIR)) {
                 mPhone.saveClirSetting(CommandsInterface.CLIR_SUPPRESSION);
+                //add for unisoc 1189298,1237284 save clir by property
+                SystemProperties.set("gsm.ss.clir", String.valueOf(CommandsInterface.CLIR_SUPPRESSION));
             }
+            /* UNISOC: add for bug 969993 @{ */
+            if (SC_WAIT.equals(mSc)) {
+                Rlog.d(LOG_TAG, "set cw value for vowifi isDeactivate()");
+                SystemProperties.set("gsm.ss.call_waiting", "false");
+            }
+            /* @} */
         } else if (isRegister()) {
             mState = State.COMPLETE;
             sb.append(mContext.getText(
@@ -1881,6 +2012,18 @@ public final class ImsPhoneMmiCode extends Handler implements MmiCode {
                 return null;
         }
     }
+
+    /* UNISOC: add for bug894041 @{ */
+    private void dismissVideoCFNotification() {
+        if (mContext != null) {
+            android.content.Intent intent = new android.content.Intent(REFRESH_VIDEO_CF_NOTIFICATION_ACTION);
+            intent.putExtra(VIDEO_CF_STATUS, false);
+            intent.putExtra(VIDEO_CF_SUB_ID, mPhone.getSubId());
+            mContext.sendBroadcast(intent);
+            Rlog.d(LOG_TAG, "refresh notification for video cf subid : "
+                    + mPhone.getSubId() + "; enable : " + false);
+        }
+    }/* @} */
 
     private String getActionStringFromReqType(int requestType) {
         switch (requestType) {

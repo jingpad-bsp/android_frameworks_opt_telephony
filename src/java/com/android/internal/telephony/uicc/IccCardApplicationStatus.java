@@ -20,6 +20,8 @@ import android.annotation.UnsupportedAppUsage;
 import android.telephony.Rlog;
 
 import com.android.internal.telephony.uicc.IccCardStatus.PinState;
+import com.android.internal.telephony.IccCardConstants.State;
+import com.android.internal.telephony.IccCardConstants;
 
 
 /**
@@ -111,11 +113,58 @@ public class IccCardApplicationStatus {
         PERSOSUBSTATE_RUIM_HRPD_PUK,
         PERSOSUBSTATE_RUIM_CORPORATE_PUK,
         PERSOSUBSTATE_RUIM_SERVICE_PROVIDER_PUK,
-        PERSOSUBSTATE_RUIM_RUIM_PUK;
+        PERSOSUBSTATE_RUIM_RUIM_PUK,
+        // UNISOC: Support SimLock
+        PERSOSUBSTATE_SIM_LOCK_PERMANENTLY;
 
         boolean isPersoSubStateUnknown() {
             return this == PERSOSUBSTATE_UNKNOWN;
         }
+        /*
+         * Unisoc: Support SimLock
+         *
+         * @{
+         */
+        boolean isPersoSubStateSimLock(){
+            return ((this == PERSOSUBSTATE_SIM_NETWORK) || (this == PERSOSUBSTATE_SIM_NETWORK_SUBSET)
+                    || (this == PERSOSUBSTATE_SIM_CORPORATE) || (this == PERSOSUBSTATE_SIM_SERVICE_PROVIDER)
+                    || (this == PERSOSUBSTATE_SIM_SIM) || (this == PERSOSUBSTATE_SIM_NETWORK_PUK)
+                    || (this == PERSOSUBSTATE_SIM_NETWORK_SUBSET_PUK) || (this == PERSOSUBSTATE_SIM_CORPORATE_PUK)
+                    || (this == PERSOSUBSTATE_SIM_SERVICE_PROVIDER_PUK) || (this == PERSOSUBSTATE_SIM_SIM_PUK)
+                    || (this == PERSOSUBSTATE_SIM_LOCK_PERMANENTLY)
+                    );
+        }
+        IccCardConstants.State getStateByPersoSubState() {
+            switch (this) {
+                case PERSOSUBSTATE_SIM_NETWORK:
+                    return IccCardConstants.State.NETWORK_LOCKED;
+                case PERSOSUBSTATE_SIM_NETWORK_SUBSET:
+                    return IccCardConstants.State.NETWORK_SUBSET_LOCKED;
+                case PERSOSUBSTATE_SIM_CORPORATE:
+                    return IccCardConstants.State.CORPORATE_LOCKED;
+                case PERSOSUBSTATE_SIM_SERVICE_PROVIDER:
+                    return IccCardConstants.State.SERVICE_PROVIDER_LOCKED;
+                case PERSOSUBSTATE_SIM_SIM:
+                    return IccCardConstants.State.SIM_LOCKED;
+                case PERSOSUBSTATE_SIM_NETWORK_PUK:
+                    return IccCardConstants.State.NETWORK_LOCKED_PUK;
+                case PERSOSUBSTATE_SIM_NETWORK_SUBSET_PUK:
+                    return IccCardConstants.State.NETWORK_SUBSET_LOCKED_PUK;
+                case PERSOSUBSTATE_SIM_CORPORATE_PUK:
+                    return IccCardConstants.State.CORPORATE_LOCKED_PUK;
+                case PERSOSUBSTATE_SIM_SERVICE_PROVIDER_PUK:
+                    return IccCardConstants.State.SERVICE_PROVIDER_LOCKED_PUK;
+                case PERSOSUBSTATE_SIM_SIM_PUK:
+                    return IccCardConstants.State.SIM_LOCKED_PUK;
+                case PERSOSUBSTATE_SIM_LOCK_PERMANENTLY:
+                    return IccCardConstants.State.SIM_LOCKED_PERMANENTLY;
+                default:
+                    return IccCardConstants.State.UNKNOWN;
+            }
+        }
+        /*
+         * @}
+         */
     }
 
     @UnsupportedAppUsage
@@ -196,6 +245,8 @@ public class IccCardApplicationStatus {
             case 22: newSubState = PersoSubState.PERSOSUBSTATE_RUIM_CORPORATE_PUK; break;
             case 23: newSubState = PersoSubState.PERSOSUBSTATE_RUIM_SERVICE_PROVIDER_PUK; break;
             case 24: newSubState = PersoSubState.PERSOSUBSTATE_RUIM_RUIM_PUK; break;
+            // Unisoc: Support SimLock
+            case 25: newSubState = PersoSubState.PERSOSUBSTATE_SIM_LOCK_PERMANENTLY; break;
             default:
                 newSubState = PersoSubState.PERSOSUBSTATE_UNKNOWN;
                 loge("PersoSubstateFromRILInt: bad substate: " + substate

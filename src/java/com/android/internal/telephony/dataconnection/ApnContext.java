@@ -553,6 +553,8 @@ public class ApnContext {
                 return ApnSetting.TYPE_IA;
             case ConnectivityManager.TYPE_MOBILE_EMERGENCY:
                 return ApnSetting.TYPE_EMERGENCY;
+            case DcTracker.NETWORK_TYPE_XCAP:
+                return ApnSetting.TYPE_XCAP;
             default:
                 return ApnSetting.TYPE_NONE;
         }
@@ -609,6 +611,10 @@ public class ApnContext {
         if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_MCX)) {
             if (apnType != ApnSetting.TYPE_NONE) error = true;
             apnType = ApnSetting.TYPE_MCX;
+        }
+        if (nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_XCAP)) {
+            if (apnType != ApnSetting.TYPE_NONE) error = true;
+            apnType = ApnSetting.TYPE_XCAP;
         }
         if (error) {
             // TODO: If this error condition is removed, the framework's handling of

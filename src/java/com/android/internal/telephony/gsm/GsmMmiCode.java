@@ -67,7 +67,7 @@ import java.util.regex.Pattern;
  * {@hide}
  *
  */
-public final class GsmMmiCode extends Handler implements MmiCode {
+public class GsmMmiCode extends Handler implements MmiCode {
     static final String LOG_TAG = "GsmMmiCode";
 
     //***** Constants
@@ -227,7 +227,8 @@ public final class GsmMmiCode extends Handler implements MmiCode {
 
         // Is this formatted like a standard supplementary service code?
         if (m.matches()) {
-            ret = new GsmMmiCode(phone, app);
+            // UNISOC: porting ussd feature for 1074135
+            ret = new GsmMmiCodeEx(phone, app);
             ret.mPoundString = makeEmptyNull(m.group(MATCH_GROUP_POUND_STRING));
             ret.mAction = makeEmptyNull(m.group(MATCH_GROUP_ACTION));
             ret.mSc = makeEmptyNull(m.group(MATCH_GROUP_SERVICE_CODE));
@@ -245,7 +246,8 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 // The dialing number ending # is treated as unique USSD,
                 // eg, *400#16 digit number# to recharge the prepaid card
                 // in India operator(Mumbai MTNL)
-                ret = new GsmMmiCode(phone, app);
+                // UNISOC: porting ussd feature for 1074135
+                ret = new GsmMmiCodeEx(phone, app);
                 ret.mPoundString = dialString;
             } else if (ret.isFacToDial()) {
                 // This is a FAC (feature access code) to dial as a normal call.
@@ -255,15 +257,16 @@ public final class GsmMmiCode extends Handler implements MmiCode {
             // TS 22.030 sec 6.5.3.2
             // "Entry of any characters defined in the 3GPP TS 23.038 [8] Default Alphabet
             // (up to the maximum defined in 3GPP TS 24.080 [10]), followed by #SEND".
-
-            ret = new GsmMmiCode(phone, app);
+            // UNISOC: porting ussd feature for 1074135
+            ret = new GsmMmiCodeEx(phone, app);
             ret.mPoundString = dialString;
         } else if (isTwoDigitShortCode(phone.getContext(), dialString)) {
             //Is a country-specific exception to short codes as defined in TS 22.030, 6.5.3.2
             ret = null;
         } else if (isShortCode(dialString, phone)) {
             // this may be a short code, as defined in TS 22.030, 6.5.3.2
-            ret = new GsmMmiCode(phone, app);
+            // UNISOC: porting ussd feature for 1074135
+            ret = new GsmMmiCodeEx(phone, app);
             ret.mDialingNumber = dialString;
         }
 
@@ -298,7 +301,8 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                             boolean isUssdRequest, GsmCdmaPhone phone, UiccCardApplication app) {
         GsmMmiCode ret;
 
-        ret = new GsmMmiCode(phone, app);
+        // UNISOC: porting ussd feature for 1074135
+        ret = new GsmMmiCodeEx(phone, app);
 
         ret.mMessage = ussdMessage;
         ret.mIsUssdRequest = isUssdRequest;
@@ -317,7 +321,8 @@ public final class GsmMmiCode extends Handler implements MmiCode {
     public static GsmMmiCode newFromUssdUserInput(String ussdMessge,
                                                   GsmCdmaPhone phone,
                                                   UiccCardApplication app) {
-        GsmMmiCode ret = new GsmMmiCode(phone, app);
+        // UNISOC: porting ussd feature for 1074135
+        GsmMmiCode ret = new GsmMmiCodeEx(phone, app);
 
         ret.mMessage = ussdMessge;
         ret.mState = State.PENDING;
@@ -498,7 +503,7 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         }
     }
 
-    private static int
+    static int
     siToServiceClass(String si) {
         if (si == null || si.length() == 0) {
                 return  SERVICE_CLASS_NONE;
@@ -1110,7 +1115,14 @@ public final class GsmMmiCode extends Handler implements MmiCode {
                 mState = State.COMPLETE;
             }
             Rlog.d(LOG_TAG, "onUssdFinished: ussdMessage=" + ussdMessage);
-            mPhone.onMMIDone(this);
+            /* UNISOC: add for FEATURE 1072670 @{ */
+            boolean ussdQueryAccountBalanceForCustom = mContext.getResources()
+                    .getBoolean(com.android.internal.R.bool.config_ussd_balance_custom);
+            if (!ussdQueryAccountBalanceForCustom || !TextUtils.isEmpty(ussdMessage)) {
+                mPhone.onMMIDone(this);
+            }
+
+            /* @} */
         }
     }
 
@@ -1269,7 +1281,8 @@ public final class GsmMmiCode extends Handler implements MmiCode {
             if (isServiceCodeCallBarring(mSc)) {
                 return mContext.getText(com.android.internal.R.string.BaMmi);
             } else if (isServiceCodeCallForwarding(mSc)) {
-                return mContext.getText(com.android.internal.R.string.CfMmi);
+                // UNISOC: modify for bug771213
+                return getCfType(mSc);
             } else if (mSc.equals(SC_CLIP)) {
                 return mContext.getText(com.android.internal.R.string.ClipMmi);
             } else if (mSc.equals(SC_CLIR)) {
@@ -1666,7 +1679,7 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         mPhone.onMMIDone(this);
     }
 
-    private CharSequence
+    CharSequence
     createQueryCallWaitingResultMessage(int serviceClass) {
         StringBuilder sb =
                 new StringBuilder(mContext.getText(com.android.internal.R.string.serviceEnabledFor));
@@ -1682,7 +1695,7 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         }
         return sb;
     }
-    private CharSequence
+    CharSequence
     createQueryCallBarringResultMessage(int serviceClass)
     {
         StringBuilder sb = new StringBuilder(mContext.getText(com.android.internal.R.string.serviceEnabledFor));
@@ -1729,4 +1742,43 @@ public final class GsmMmiCode extends Handler implements MmiCode {
         sb.append("}");
         return sb.toString();
     }
+
+
+    /* SPRD: porting ussd feature for bug1074135 @{ */
+    public void setUssdRequest(boolean isUssdRequest) {
+        mIsUssdRequest = isUssdRequest;
+    }
+
+    public boolean isCallFwdReg() {
+        return mIsCallFwdReg;
+    }
+
+    public CharSequence getCfType(String sc) {
+
+        int resId = com.android.internal.R.string.CfMmi;
+        //UNISOC: porting for bug1073300
+        boolean needShowType = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_add_mmi_cf_title_type);
+        Rlog.i(LOG_TAG, "getScString needShowType " + needShowType);
+        if (needShowType) {
+            switch (sc) {
+                case SC_CFU:
+                    resId = com.android.internal.R.string.cfmmiuncondition;
+                    break;
+                case SC_CFB:
+                    resId = com.android.internal.R.string.cfmmibusy;
+                    break;
+                case SC_CFNRy:
+                    resId = com.android.internal.R.string.cfmminoreply;
+                    break;
+                case SC_CFNR:
+                    resId = com.android.internal.R.string.cfmminoreach;
+                    break;
+                default:
+                    break;
+            }
+        }
+        return mContext.getText(resId);
+    }
+    /* @} */
 }

@@ -56,6 +56,7 @@ import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.PhoneFactory;
 import com.android.internal.telephony.SubscriptionController;
+import com.android.internal.telephony.TeleUtils;
 import com.android.internal.telephony.cat.CatService;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppType;
 import com.android.internal.telephony.uicc.IccCardStatus.CardState;
@@ -126,6 +127,7 @@ public class UiccProfile extends IccCard {
     private static final int EVENT_SIM_IO_DONE = 12;
     private static final int EVENT_CARRIER_PRIVILEGES_LOADED = 13;
     private static final int EVENT_CARRIER_CONFIG_CHANGED = 14;
+    private static final int EVENT_LOCAL_CHANGED = 15;
 
     private TelephonyManager mTelephonyManager;
 
@@ -153,6 +155,9 @@ public class UiccProfile extends IccCard {
         public void onReceive(Context context, Intent intent) {
             if (intent.getAction().equals(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED)) {
                 mHandler.sendMessage(mHandler.obtainMessage(EVENT_CARRIER_CONFIG_CHANGED));
+            } else if (Intent.ACTION_LOCALE_CHANGED.equals(intent.getAction())) {
+                log ("local changed , update carrier name");
+                mHandler.sendMessage(mHandler.obtainMessage(EVENT_LOCAL_CHANGED));
             }
         }
     };
@@ -222,6 +227,11 @@ public class UiccProfile extends IccCard {
                     ((Message) ar.userObj).sendToTarget();
                     break;
 
+                //UNISOC:Translation service provider name
+                case EVENT_LOCAL_CHANGED:
+                    handleCarrierNameOverride();
+                    break;
+
                 default:
                     loge("handleMessage: Unhandled message with number: " + msg.what);
                     break;
@@ -253,6 +263,7 @@ public class UiccProfile extends IccCard {
 
         IntentFilter intentfilter = new IntentFilter();
         intentfilter.addAction(CarrierConfigManager.ACTION_CARRIER_CONFIG_CHANGED);
+        intentfilter.addAction(Intent.ACTION_LOCALE_CHANGED);
         c.registerReceiver(mReceiver, intentfilter);
     }
 
@@ -362,6 +373,14 @@ public class UiccProfile extends IccCard {
         if (!TextUtils.isEmpty(newCarrierName)) {
             mTelephonyManager.setSimOperatorNameForPhone(mPhoneId, newCarrierName);
             mOperatorBrandOverrideRegistrants.notifyRegistrants();
+        }
+
+        //UNISOC:Translation service provider name
+        String simOperatorName = mTelephonyManager.getSimOperatorNameForPhone(mPhoneId);
+        String updateSimOperatorName = TeleUtils.translateOperatorName(
+                mTelephonyManager.getSimOperatorNumericForPhone(mPhoneId), simOperatorName);
+        if (!preferCcName && !updateSimOperatorName.equals(simOperatorName)) {
+            mTelephonyManager.setSimOperatorNameForPhone(mPhoneId, updateSimOperatorName);
         }
 
         updateCarrierNameForSubscription(subCon, subId, nameSource);
@@ -506,12 +525,23 @@ public class UiccProfile extends IccCard {
                 cardLocked = true;
                 lockedState = IccCardConstants.State.PUK_REQUIRED;
             } else if (appState == IccCardApplicationStatus.AppState.APPSTATE_SUBSCRIPTION_PERSO) {
+                /* Unisoc: Support SimLock
+                 *
+                 * @orig
                 if (mUiccApplication.getPersoSubState()
                         == IccCardApplicationStatus.PersoSubState.PERSOSUBSTATE_SIM_NETWORK) {
                     if (VDBG) log("updateExternalState: PERSOSUBSTATE_SIM_NETWORK");
                     cardLocked = true;
                     lockedState = IccCardConstants.State.NETWORK_LOCKED;
                 }
+                /* @{ */
+                IccCardApplicationStatus.PersoSubState persoSubState = mUiccApplication.getPersoSubState();
+                if(persoSubState.isPersoSubStateSimLock()){
+                    log("updateExternalState: " + persoSubState);
+                    cardLocked = true;
+                    lockedState = persoSubState.getStateByPersoSubState();
+                }
+                /* @} */
             }
         }
 
@@ -689,6 +719,18 @@ public class UiccProfile extends IccCard {
             case PERM_DISABLED: return IccCardConstants.INTENT_VALUE_ABSENT_ON_PERM_DISABLED;
             case CARD_IO_ERROR: return IccCardConstants.INTENT_VALUE_ICC_CARD_IO_ERROR;
             case CARD_RESTRICTED: return IccCardConstants.INTENT_VALUE_ICC_CARD_RESTRICTED;
+            /* Unisoc: Support Simlock  @{ */
+            case NETWORK_SUBSET_LOCKED: return IccCardConstants.INTENT_VALUE_LOCKED_NS;
+            case SERVICE_PROVIDER_LOCKED: return IccCardConstants.INTENT_VALUE_LOCKED_SP;
+            case CORPORATE_LOCKED: return IccCardConstants.INTENT_VALUE_LOCKED_CP;
+            case SIM_LOCKED: return IccCardConstants.INTENT_VALUE_LOCKED_SIM;
+            case NETWORK_LOCKED_PUK: return IccCardConstants.INTENT_VALUE_LOCKED_NETWORK_PUK;
+            case NETWORK_SUBSET_LOCKED_PUK: return IccCardConstants.INTENT_VALUE_LOCKED_NS_PUK;
+            case SERVICE_PROVIDER_LOCKED_PUK: return IccCardConstants.INTENT_VALUE_LOCKED_SP_PUK;
+            case CORPORATE_LOCKED_PUK: return IccCardConstants.INTENT_VALUE_LOCKED_CP_PUK;
+            case SIM_LOCKED_PUK: return IccCardConstants.INTENT_VALUE_LOCKED_SIM_PUK;
+            case SIM_LOCKED_PERMANENTLY: return IccCardConstants.INTENT_VALUE_LOCKED_PERMANENTLY;
+            /* @} */
             default: return null;
         }
     }
@@ -718,9 +760,18 @@ public class UiccProfile extends IccCard {
 
             mNetworkLockedRegistrants.add(r);
 
+            /*
+             * Unisoc: Support SimLock
+             * @orig
             if (getState() == IccCardConstants.State.NETWORK_LOCKED) {
                 r.notifyRegistrant();
             }
+            /* @{*/
+            IccCardConstants.State state = getState();
+            if (state.isSimLockLocked()){
+                r.notifyRegistrant();
+            }
+            /* @} */
         }
     }
 

@@ -104,6 +104,11 @@ public class ApnSettingUtils {
             if ((iccId != null) && iccidMatches(mvnoMatchData, iccId)) {
                 return true;
             }
+        } else if (mvnoType == ApnSetting.MVNO_TYPE_PNN) {
+            String pnn = r.getPnnHomeName();
+            if (pnn != null && pnn.equalsIgnoreCase(mvnoMatchData)) {
+                return true;
+            }
         }
 
         return false;

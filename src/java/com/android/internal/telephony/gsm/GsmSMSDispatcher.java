@@ -23,12 +23,13 @@ import android.telephony.Rlog;
 import android.telephony.ServiceState;
 import android.util.Pair;
 
+import com.android.ims.internal.ImsManagerEx;
 import com.android.internal.telephony.GsmAlphabet.TextEncodingDetails;
 import com.android.internal.telephony.InboundSmsHandler;
 import com.android.internal.telephony.Phone;
+import com.android.internal.telephony.SMSDispatcher;
 import com.android.internal.telephony.SmsConstants;
 import com.android.internal.telephony.SmsDispatchersController;
-import com.android.internal.telephony.SMSDispatcher;
 import com.android.internal.telephony.SmsHeader;
 import com.android.internal.telephony.SmsMessageBase;
 import com.android.internal.telephony.uicc.IccRecords;
@@ -188,7 +189,7 @@ public final class GsmSMSDispatcher extends SMSDispatcher {
 
         int ss = mPhone.getServiceState().getState();
         // if sms over IMS is not supported on data and voice is not available...
-        if (!isIms() && ss != ServiceState.STATE_IN_SERVICE) {
+        if (!isIms() && ss != ServiceState.STATE_IN_SERVICE && !ImsManagerEx.isVoLTERegisteredForPhone(mPhone.getPhoneId()) ){
             tracker.onFailed(mContext, getNotInServiceError(ss), 0/*errorCode*/);
             return;
         }

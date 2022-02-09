@@ -77,11 +77,13 @@ import com.android.internal.telephony.dataconnection.DcTracker;
 import com.android.internal.telephony.dataconnection.TransportManager;
 import com.android.internal.telephony.emergency.EmergencyNumberTracker;
 import com.android.internal.telephony.imsphone.ImsPhoneCall;
+import com.android.internal.telephony.PrimarySubConfig;
 import com.android.internal.telephony.test.SimulatedRadioControl;
 import com.android.internal.telephony.uicc.IccCardApplicationStatus.AppType;
 import com.android.internal.telephony.uicc.IccFileHandler;
 import com.android.internal.telephony.uicc.IccRecords;
 import com.android.internal.telephony.uicc.IsimRecords;
+import com.android.internal.telephony.uicc.RuimRecords;
 import com.android.internal.telephony.uicc.UiccCard;
 import com.android.internal.telephony.uicc.UiccCardApplication;
 import com.android.internal.telephony.uicc.UiccController;
@@ -252,6 +254,10 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
 
     // Integer used to let the calling application know that the we are ignoring auto mode switch.
     private static final int ALREADY_IN_AUTO_SELECTION = 1;
+
+    //BUG: 1230341
+    private static final String ENHANCED_4G_MODE_ENABLED_BY_NR = "volte_vt_enabled_by_nr";
+    private int mLastNetworkType = -1;
 
     /**
      * This method is invoked when the Phone exits Emergency Callback Mode.
@@ -715,7 +721,12 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
                     String dialString = (String) ar.result;
                     if (TextUtils.isEmpty(dialString)) return;
                     try {
-                        dialInternal(dialString, new DialArgs.Builder().build());
+                        Connection conn = dialInternal(dialString, new DialArgs.Builder().build());
+                        /* UNISOC: add for bug1052970{ */
+                        if(conn != null){
+                            notifyUnknownConnectionP(conn);
+                        }
+                        /*@}*/
                     } catch (CallStateException e) {
                         Rlog.e(LOG_TAG, "silent redial failed: " + e);
                     }
@@ -1975,6 +1986,11 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     public void setVoiceCallForwardingFlag(int line, boolean enable, String number) {
         setCallForwardingIndicatorInSharedPref(enable);
         IccRecords r = mIccRecords.get();
+        /* UNISOC: Add for bug 1105335 @{ */
+        if(getIccRecordsByRuimRecords(r) != null) {
+            r = getIccRecordsByRuimRecords(r);
+        }
+        /* @} */
         if (r != null) {
             r.setVoiceCallForwardingFlag(line, enable, number);
         }
@@ -1983,6 +1999,11 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
     protected void setVoiceCallForwardingFlag(IccRecords r, int line, boolean enable,
                                               String number) {
         setCallForwardingIndicatorInSharedPref(enable);
+        /* UNISOC: Add for bug 1105335 @{ */
+        if(getIccRecordsByRuimRecords(r) != null) {
+            r = getIccRecordsByRuimRecords(r);
+        }
+        /* @} */
         r.setVoiceCallForwardingFlag(line, enable, number);
     }
 
@@ -1993,11 +2014,19 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
      * @return true if there is a voice call forwarding
      */
     public boolean getCallForwardingIndicator() {
-        if (getPhoneType() == PhoneConstants.PHONE_TYPE_CDMA) {
-            Rlog.e(LOG_TAG, "getCallForwardingIndicator: not possible in CDMA");
-            return false;
-        }
+        /** Orig
+        * UNISOC: Add for bug1075088
+        * if (getPhoneType() == PhoneConstants.PHONE_TYPE_CDMA) {
+        * Rlog.e(LOG_TAG, "getCallForwardingIndicator: not possible in CDMA");
+        * return false;
+        * }
+        */
         IccRecords r = mIccRecords.get();
+        /* UNISOC: Add for bug 1105335 @{ */
+        if(getIccRecordsByRuimRecords(r) != null) {
+            r = getIccRecordsByRuimRecords(r);
+        }
+        /* @} */
         int callForwardingIndicator = IccRecords.CALL_FORWARDING_STATUS_UNKNOWN;
         if (r != null) {
             callForwardingIndicator = r.getVoiceCallForwardingFlag();
@@ -2010,6 +2039,21 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
                     + getCallForwardingIndicatorFromSharedPref());
         return (callForwardingIndicator == IccRecords.CALL_FORWARDING_STATUS_ENABLED);
     }
+
+    /* UNISOC: Add for bug 1105335 @{ */
+    private IccRecords getIccRecordsByRuimRecords(IccRecords r) {
+        IccRecords iccRecords = null;
+        if (r != null && (r instanceof RuimRecords)) {
+            UiccCardApplication newUiccApplication = null;
+            UiccController uiccController = (mUiccController != null ? mUiccController : UiccController.getInstance());
+            newUiccApplication = uiccController.getUiccCardApplication(mPhoneId, UiccController.APP_FAM_3GPP);
+            if (newUiccApplication != null) {
+                iccRecords = newUiccApplication.getIccRecords();
+            }
+        }
+        return iccRecords;
+    }
+    /* @} */
 
     public CarrierSignalAgent getCarrierSignalAgent() {
         return mCarrierSignalAgent;
@@ -2103,12 +2147,24 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
         int filteredRaf = (rafFromType & modemRaf);
         int filteredType = RadioAccessFamily.getNetworkTypeFromRaf(filteredRaf);
 
+        // Unisoc: bug/886904 add network type restriction for operators.
+        PrimarySubConfig config = PrimarySubConfig.getInstance();
+        int restrictedNetType = config != null ? config.getRestrictedNetworkType(getPhoneId()) : -1;
+
         Rlog.d(LOG_TAG, "setPreferredNetworkType: networkType = " + networkType
                 + " modemRaf = " + modemRaf
                 + " rafFromType = " + rafFromType
-                + " filteredType = " + filteredType);
+                + " filteredType = " + filteredType
+                + " restrictedNetType = " + restrictedNetType);
+        if (restrictedNetType >= 0) {
+            filteredType = restrictedNetType;
+            Rlog.d(LOG_TAG,
+                    "Network of phone " + getPhoneId() + " is restricted: " + restrictedNetType);
+        }
 
         mCi.setPreferredNetworkType(filteredType, response);
+        //BUG: 1230341
+        setEnh4glteMode(filteredType, getPhoneId());
     }
 
     /**
@@ -4033,6 +4089,57 @@ public abstract class Phone extends Handler implements PhoneInternalInterface {
             return ((RIL) mCi).getHalVersion();
         }
         return RIL.RADIO_HAL_VERSION_UNKNOWN;
+    }
+
+    //BUG: 1230341
+    public void setEnh4glteMode(int networkType, int phoneId) {
+        ImsManager imsManager = ImsManager.getInstance(mContext, phoneId);
+        boolean enh4glteMode = imsManager.isEnhanced4gLteModeSettingEnabledByUser();
+        int lastRafFromType = RadioAccessFamily.getRafFromNetworkType(mLastNetworkType);
+        int rafFomType = RadioAccessFamily.getRafFromNetworkType(networkType);
+        int subId = getSubId();
+        if (!SubscriptionManager.isValidSubscriptionId(subId)
+                || !imsManager.isVolteEnabledByPlatform()) {
+            Rlog.d(LOG_TAG, " subId is invalid");
+            mLastNetworkType = networkType;
+            return;
+        }
+        int turnOnImsByNr = android.provider.Settings.Global.getInt(
+            mContext.getContentResolver(),
+            ENHANCED_4G_MODE_ENABLED_BY_NR + subId,
+            0);
+        Rlog.d(LOG_TAG, " enh4glteMode: " + enh4glteMode + " turnOnImsByNr = " + turnOnImsByNr);
+        // 4g->5g: if volte switch is closed, need to open
+        if ((lastRafFromType & RadioAccessFamily.RAF_NR) == 0 &&
+                (rafFomType & RadioAccessFamily.RAF_NR) != 0) {
+            if (!enh4glteMode) {
+                //turn on ims
+                Rlog.d(LOG_TAG," 5G is open need to turn on volte switch");
+                android.provider.Settings.Global.putInt(
+                        mContext.getContentResolver(),
+                        ENHANCED_4G_MODE_ENABLED_BY_NR + subId,
+                        1);
+                imsManager.setEnhanced4gLteModeSetting(true);
+            }
+        // 5g->4g if volte switch is open by nr,need to change to volte state by user
+        } else if((lastRafFromType & RadioAccessFamily.RAF_NR) != 0 &&
+                (rafFomType & RadioAccessFamily.RAF_NR) == 0) {
+            if (enh4glteMode && (turnOnImsByNr == 1)) {
+                Rlog.d(LOG_TAG, " 5G is closed and the volte switch is closed by user need to" +
+                        " close volte switch");
+                imsManager.setEnhanced4gLteModeSetting(false);
+                android.provider.Settings.Global.putInt(
+                        mContext.getContentResolver(),
+                        ENHANCED_4G_MODE_ENABLED_BY_NR + subId,
+                        0);
+            }
+        }
+        mLastNetworkType = networkType;
+    }
+
+    //BUG: 1229795
+    public int getPreferNetworkType() {
+        return mLastNetworkType;
     }
 
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {

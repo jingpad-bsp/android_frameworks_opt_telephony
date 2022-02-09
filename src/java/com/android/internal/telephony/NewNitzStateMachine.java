@@ -411,6 +411,11 @@ public final class NewNitzStateMachine implements NitzStateMachine {
         mTimeZoneLog.log(tmpLog);
         if (mSavedTimeZoneId != null) {
             setAndBroadcastNetworkSetTimeZone(mSavedTimeZoneId);
+        } else {
+            String iso = mDeviceState.getNetworkCountryIsoForPhone();
+            if (!TextUtils.isEmpty(iso)) {
+                updateTimeZoneFromNetworkCountryCode(iso);
+            }
         }
     }
 
@@ -444,6 +449,44 @@ public final class NewNitzStateMachine implements NitzStateMachine {
     }
 
     /**
+     * Unisoc Add For Bug 1072748:
+     * These countries have more than one unique timezones,
+     * to get default timezone when no NITZ reports,
+     * add this list to return timezoneID which capital uses.
+     */
+    private String[][] mDefaultTZForMultiTZCountry = {
+        {"cn", "Asia/Shanghai"}, // CHINA, 8:00
+        {"us", "America/New_York"}, // UNITED STATES, -5:00
+        {"ru", "Europe/Moscow"}, // RUSSIAN FEDERATION, 3:00
+        {"au", "Australia/Sydney"}, // AUSTRALIA, 10:00
+        {"ca", "America/Toronto"}, // CANADA, -5:00
+        {"nz", "Pacific/Auckland"}, // NEW ZEALAND, 12:00
+        {"br", "America/Sao_Paulo"}, // BRAZIL, -3:00
+        {"mx", "America/Mexico_City"}, // MEXICO, -6:00
+        {"id", "Asia/Jakarta"}, // INDONESIA, 7:00
+        {"ki", "Pacific/Tarawa"}, // KIRIBATI, 12:00
+        {"cl", "America/Santiago"}, // CHILE, -4:00
+        {"cd", "Africa/Kinshasa"}, // CONGO, THE DEMOCRATIC REPUBLIC OF THE, 1:00
+        {"ec", "America/Guayaquil"}, // ECUADOR, -5:00
+        {"fm", "Pacific/Ponape"}, // MICRONESIA, FEDERATED STATES OF, 11:00
+        {"kz", "Asia/Almaty"}, // KAZAKHSTAN, 6:00
+        {"mn", "Asia/Choibalsan"}, // MONGOLIA, 8:00
+        {"aq", "Antarctica/McMurdo"}, //ANTARCTICA, 12:00
+        {"ar", "America/Argentina/Buenos_Aires"}, //ARGENTINA, 3:00
+        {"cy", "Asia/Nicosia"}, // CYPRUS, 2:00
+        {"de", "Europe/Berlin"}, //GERMANY, 1:00
+        {"es", "Europe/Madrid"}, //SPAIN, 1:00
+        {"gl", "America/Godthab"}, //GREENLAND, -3:00
+        {"mh", "Pacific/Majuro"}, //MARSHALL ISLANDS, 12:00
+        {"my", "Asia/Kuala_Lumpur"}, //MALAYSIA, 8:00
+        {"pf", "Pacific/Gambier"}, // FRENCH POLYNESIA, -9:00
+        {"pg", "Pacific/Port_Moresby"}, // PAPUA NEW GUINEA, 10:00
+        {"pt", "Europe/Lisbon"}, // PORTUGAL, 0:00
+        {"ua", "Europe/Kiev"}, // UKRAINE, 2:00
+        {"um", "Pacific/Wake"} // UNITED STATES MINOR OUTLYING ISLANDS, 12:00
+    };
+
+    /**
      * Update time zone by network country code, works well on countries which only have one time
      * zone or multiple zones with the same offset.
      *
@@ -465,7 +508,17 @@ public final class NewNitzStateMachine implements NitzStateMachine {
                 setAndBroadcastNetworkSetTimeZone(zoneId);
             }
             mSavedTimeZoneId = zoneId;
-        } else {
+        } else if (mTimeServiceHelper.isTimeZoneDetectionEnabled()) {
+            //Unisoc: Add For Bug 1072748 :
+            for (int i = 0; i < mDefaultTZForMultiTZCountry.length; i++) {
+                if (iso.equals(mDefaultTZForMultiTZCountry[i][0])) {
+                    Rlog.d(LOG_TAG, "updateTimeZoneByNetworkCountryCode: no unique zone for"
+                            + " iso=" + iso
+                            + " set Timezone to = " + mDefaultTZForMultiTZCountry[i][1]);
+                    setAndBroadcastNetworkSetTimeZone(mDefaultTZForMultiTZCountry[i][1]);
+                    return;
+                }
+            }
             if (DBG) {
                 Rlog.d(LOG_TAG, "updateTimeZoneFromNetworkCountryCode: no good zone for"
                         + " iso=" + iso

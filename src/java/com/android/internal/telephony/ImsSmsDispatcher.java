@@ -39,12 +39,14 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.GsmAlphabet.TextEncodingDetails;
 import com.android.internal.telephony.metrics.TelephonyMetrics;
 import com.android.internal.telephony.util.SMSDispatcherUtil;
-
+import android.text.format.Time;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-
+import android.telephony.SmsMessage;
+import android.telephony.SmsManager;
+import com.android.internal.telephony.uicc.IccUtils;
 /**
  * Responsible for communications with {@link com.android.ims.ImsManager} to send/receive messages
  * over IMS.
@@ -176,12 +178,18 @@ public class ImsSmsDispatcher extends SMSDispatcher {
             Rlog.d(TAG, "SMS received.");
             android.telephony.SmsMessage message =
                     android.telephony.SmsMessage.createFromPdu(pdu, format);
+            final  SmsMessage class2Sms = message;
+
             mSmsDispatchersController.injectSmsPdu(message, format, result -> {
                 Rlog.d(TAG, "SMS handled result: " + result);
                 int mappedResult;
                 switch (result) {
                     case Intents.RESULT_SMS_HANDLED:
                         mappedResult = ImsSmsImplBase.DELIVER_STATUS_OK;
+                if (class2Sms != null &&
+                        class2Sms.getMessageClass() == SmsMessage.MessageClass.CLASS_2) {
+                    writeSmsToSim(class2Sms);
+                }//980827 for vowifi save to sim
                         break;
                     case Intents.RESULT_SMS_OUT_OF_MEMORY:
                         mappedResult = ImsSmsImplBase.DELIVER_STATUS_ERROR_NO_MEMORY;
@@ -207,6 +215,16 @@ public class ImsSmsDispatcher extends SMSDispatcher {
             }, true);
         }
     };
+
+    private void writeSmsToSim(SmsMessage smsMessage) {
+        String address = smsMessage.getOriginatingAddress();
+        String body = smsMessage.getMessageBody();
+        Time time = new Time();
+        time.set(smsMessage.getTimestampMillis());
+        byte[] data = com.android.internal.telephony.gsm.SmsMessage.getReceivedPdu(address, body, time);
+   Rlog.d(TAG, "ImsManager:writeSmsToSim");
+        mPhone.mCi.writeSmsToSim(SmsManager.STATUS_ON_ICC_READ, null, IccUtils.bytesToHexString(data), null);
+    }
 
     public ImsSmsDispatcher(Phone phone, SmsDispatchersController smsDispatchersController) {
         super(phone, smsDispatchersController);

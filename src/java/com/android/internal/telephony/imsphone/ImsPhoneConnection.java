@@ -132,6 +132,8 @@ public class ImsPhoneConnection extends Connection implements
     // Store the current audio codec
     private int mAudioCodec = ImsStreamMediaProfile.AUDIO_QUALITY_NONE;
 
+    String mVendorCause;
+
     //***** Event Constants
     private static final int EVENT_DTMF_DONE = 1;
     private static final int EVENT_PAUSE_DONE = 2;
@@ -345,7 +347,8 @@ public class ImsPhoneConnection extends Connection implements
 
     @Override
     public String getVendorDisconnectCause() {
-      return null;
+        //add for bug993551 support VoLTE clear code
+        return mVendorCause;
     }
 
     @UnsupportedAppUsage
@@ -442,6 +445,7 @@ public class ImsPhoneConnection extends Connection implements
     void
     onHangupLocal() {
         mCause = DisconnectCause.LOCAL;
+        mVendorCause = null;
     }
 
     /** Called when the connection has been disconnected */
@@ -734,7 +738,9 @@ public class ImsPhoneConnection extends Connection implements
                 onConnectedInOrOut();
             }
 
-            if (mParent.getState().isRinging() || mParent == mOwner.mBackgroundCall) {
+            //SRRD: modify by bug887743
+            if (mParent.getState().isRinging() || mParent.getState() == ImsPhoneCall.State.DISCONNECTING
+                    || mParent == mOwner.mBackgroundCall) {
                 //mForegroundCall should be IDLE
                 //when accepting WAITING call
                 //before accept WAITING call,
@@ -816,7 +822,7 @@ public class ImsPhoneConnection extends Connection implements
 
         boolean changed = false;
         ImsCallProfile callProfile = imsCall.getCallProfile();
-        if (callProfile != null && isIncoming()) {
+        if (callProfile != null /*UNISOC:remove for bug827995 Orig:&& isIncoming()*/) {
             // Only look for changes to the address for incoming calls.  The originating identity
             // can change for outgoing calls due to, for example, a call being forwarded to
             // voicemail.  This address change does not need to be presented to the user.

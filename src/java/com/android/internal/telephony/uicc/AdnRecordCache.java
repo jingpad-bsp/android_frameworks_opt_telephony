@@ -18,10 +18,10 @@ package com.android.internal.telephony.uicc;
 
 import android.annotation.UnsupportedAppUsage;
 import android.os.AsyncResult;
-import android.os.Handler;
 import android.os.Message;
 import android.util.SparseArray;
 
+import com.android.internal.telephony.AbsAdnRecordCache;
 import com.android.internal.telephony.gsm.UsimPhoneBookManager;
 
 import java.util.ArrayList;
@@ -30,7 +30,7 @@ import java.util.Iterator;
 /**
  * {@hide}
  */
-public class AdnRecordCache extends Handler implements IccConstants {
+public class AdnRecordCache extends AbsAdnRecordCache implements IccConstants {
     //***** Instance Variables
 
     @UnsupportedAppUsage

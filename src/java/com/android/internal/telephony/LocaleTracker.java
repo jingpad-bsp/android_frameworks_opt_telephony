@@ -247,7 +247,7 @@ public class LocaleTracker extends Handler {
      *
      * @param state SIM card state. Must be one of TelephonyManager.SIM_STATE_XXX.
      */
-    private synchronized void onSimCardStateChanged(int state) {
+    private void onSimCardStateChanged(int state) {
         mSimState = state;
         updateLocale();
         updateTrackingStatus();

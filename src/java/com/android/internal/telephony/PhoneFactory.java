@@ -25,6 +25,7 @@ import android.content.pm.PackageManager;
 import android.net.LocalServerSocket;
 import android.os.Looper;
 import android.os.ServiceManager;
+import android.os.SystemProperties;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
 import android.provider.Settings.SettingNotFoundException;
@@ -32,6 +33,7 @@ import android.telephony.AnomalyReporter;
 import android.telephony.Rlog;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
+import android.text.TextUtils;
 import android.util.LocalLog;
 
 import com.android.internal.os.BackgroundThread;
@@ -46,6 +48,7 @@ import com.android.internal.telephony.sip.SipPhone;
 import com.android.internal.telephony.sip.SipPhoneFactory;
 import com.android.internal.telephony.uicc.UiccController;
 import com.android.internal.telephony.util.NotificationChannelController;
+import com.android.internal.telephony.OperatorNameHandler;
 import com.android.internal.util.IndentingPrintWriter;
 
 import java.io.FileDescriptor;
@@ -97,6 +100,9 @@ public class PhoneFactory {
 
     static private final HashMap<String, LocalLog>sLocalLogs = new HashMap<String, LocalLog>();
 
+    // Claro Test APN private failed
+    private static final String LTE_MANUAL_ATTACH_PROP = "persist.radio.manual.attach";
+
     //***** Class Methods
 
     public static void makeDefaultPhones(Context context) {
@@ -145,6 +151,12 @@ public class PhoneFactory {
                 int cdmaSubscription = CdmaSubscriptionSourceManager.getDefault(context);
                 Rlog.i(LOG_TAG, "Cdma Subscription set to " + cdmaSubscription);
 
+                // Claro Test APN private failed
+                String product = SystemProperties.get("ro.carrier");
+                if (!TextUtils.isEmpty(product) && "claro".equals(product.toLowerCase())) {
+                    SystemProperties.set(LTE_MANUAL_ATTACH_PROP, "1");
+                }
+
                 /* In case of multi SIM mode two instances of Phone, RIL are created,
                    where as in single SIM mode only instance. isMultiSimEnabled() function checks
                    whether it is single SIM or multi SIM mode */
@@ -174,7 +186,7 @@ public class PhoneFactory {
                 Rlog.i(LOG_TAG, "Creating SubscriptionController");
                 SubscriptionController.init(context, sCommandsInterfaces);
                 MultiSimSettingController.init(context, SubscriptionController.getInstance());
-
+                OperatorNameHandler.init(context);
                 if (context.getPackageManager().hasSystemFeature(
                         PackageManager.FEATURE_TELEPHONY_EUICC)) {
                     sEuiccController = EuiccController.init(context);
@@ -185,12 +197,18 @@ public class PhoneFactory {
                     Phone phone = null;
                     int phoneType = TelephonyManager.getPhoneType(networkModes[i]);
                     if (phoneType == PhoneConstants.PHONE_TYPE_GSM) {
-                        phone = new GsmCdmaPhone(context,
+                        /*UNISOC: modify for IMS
+                          @Orig:phone = new GsmCdmaPhoneEx(context,{*/
+                        phone = new GsmCdmaPhoneEx(context,
+                        /*@}*/
                                 sCommandsInterfaces[i], sPhoneNotifier, i,
                                 PhoneConstants.PHONE_TYPE_GSM,
                                 TelephonyComponentFactory.getInstance());
                     } else if (phoneType == PhoneConstants.PHONE_TYPE_CDMA) {
-                        phone = new GsmCdmaPhone(context,
+                        /*UNISOC: modify for IMS
+                          @Orig:phone = new GsmCdmaPhoneEx(context,{*/
+                        phone = new GsmCdmaPhoneEx(context,
+                        /*@}*/
                                 sCommandsInterfaces[i], sPhoneNotifier, i,
                                 PhoneConstants.PHONE_TYPE_CDMA_LTE,
                                 TelephonyComponentFactory.getInstance());

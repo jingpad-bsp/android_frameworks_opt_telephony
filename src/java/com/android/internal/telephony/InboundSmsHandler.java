@@ -68,6 +68,7 @@ import com.android.internal.R;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.SmsConstants.MessageClass;
 import com.android.internal.telephony.metrics.TelephonyMetrics;
+import com.android.internal.telephony.plugin.BlockInboundSmsHandlerUtils;
 import com.android.internal.telephony.util.NotificationChannelController;
 import com.android.internal.util.HexDump;
 import com.android.internal.util.State;
@@ -80,7 +81,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
+import android.util.Log;
 /**
  * This class broadcasts incoming SMS messages to interested apps after storing them in
  * the SmsProvider "raw" table and ACKing them to the SMSC. After each message has been
@@ -248,6 +249,9 @@ public abstract class InboundSmsHandler extends StateMachine {
     private static String ACTION_OPEN_SMS_APP =
         "com.android.internal.telephony.OPEN_DEFAULT_SMS_APP";
 
+    //UNISOC: Add for bug1072408
+    private static int MARK_SMS_BLOCK_TYPE = 2;
+
     /** Timeout for releasing wakelock */
     private int mWakeLockTimeout;
 
@@ -337,8 +341,9 @@ public abstract class InboundSmsHandler extends StateMachine {
                             loge("Rec[%d]: %s\n" + i + getLogRec(i).toString());
                         }
                         loge("---- Dumped InboundSmsHandler ----");
-
-                        throw new RuntimeException(errorText);
+                        //bug787492 begin
+                        //throw new RuntimeException(errorText);
+                        //bug787492 end
                     } else {
                         loge(errorText);
                     }
@@ -653,6 +658,20 @@ public abstract class InboundSmsHandler extends StateMachine {
             return Intents.RESULT_SMS_GENERIC_ERROR;
         }
 
+        if(SMSDispatcher.checktheOperatorIsThailand()){
+            if(SMSDispatcher.judgeTrueSIM2(getPhone(),mContext)==SMSDispatcher.NOT_IN_THAILAND) {
+                // Device doesn't support receiving SMS,
+                Log.w("hzh","Received short message on device which doesn't support receiving SMS. Ignored.");
+                return Intents.RESULT_SMS_HANDLED;
+            }
+            if(SMSDispatcher.judgeTrueSIM2(getPhone(),mContext)==SMSDispatcher.NOT_TRUE_SIM_IN_THAILAND) {
+                SmsHeader smsHeader = smsb.getUserDataHeader();
+                Log.w("hzh","destination smsHeader: " + smsHeader);
+                if(smsHeader != null) {
+                    return Intents.RESULT_SMS_HANDLED;
+                 }
+             }
+          }
         if (mSmsReceiveDisabled) {
             // Device doesn't support receiving SMS,
             log("Received short message on device which doesn't support "
@@ -774,7 +793,12 @@ public abstract class InboundSmsHandler extends StateMachine {
         }
 
         if (VDBG) log("created tracker: " + tracker);
-
+       /*UNISOC: modify for bug1164988*/
+        if((SMSDispatcher.CTCC_DM_SERVER_NUMBER).equals(sms.getDisplayOriginatingAddress())){
+                 return addTrackerToRawTableAndSendMessage(tracker,
+                              false/* ctcc dm not check dup*/);
+         }
+       /*UNISOC: modify for bug1164988*/
         // de-duping is done only for text messages
         // destPort = -1 indicates text messages, otherwise it's a data sms
         return addTrackerToRawTableAndSendMessage(tracker,
@@ -817,6 +841,8 @@ public abstract class InboundSmsHandler extends StateMachine {
         long[] timestamps;
         int destPort = tracker.getDestPort();
         boolean block = false;
+        // UNISOC: Add  for bug1072408.
+        int blocktype = MARK_SMS_BLOCK_TYPE;
         String address = tracker.getAddress();
 
         // Do not process when the message count is invalid.
@@ -830,7 +856,8 @@ public abstract class InboundSmsHandler extends StateMachine {
             // single-part message
             pdus = new byte[][]{tracker.getPdu()};
             timestamps = new long[]{tracker.getTimestamp()};
-            block = BlockChecker.isBlocked(mContext, tracker.getDisplayAddress(), null);
+            // UNISOC: Add  for bug1072408.
+            block = BlockChecker.isBlocked(mContext, tracker.getDisplayAddress(), null, blocktype);
         } else {
             // multi-part message
             Cursor cursor = null;
@@ -900,9 +927,10 @@ public abstract class InboundSmsHandler extends StateMachine {
                         // at the beginning in the message body. In that case only the first SMS
                         // (part of Multi-SMS) comes with the display originating address which
                         // could be used for block checking purpose.
+                        // UNISOC: Add  for bug1072408.
                         block = BlockChecker.isBlocked(mContext,
                                 cursor.getString(PDU_SEQUENCE_PORT_PROJECTION_INDEX_MAPPING
-                                        .get(DISPLAY_ADDRESS_COLUMN)), null);
+                                        .get(DISPLAY_ADDRESS_COLUMN)), null, blocktype);
                     }
                 }
             } catch (SQLException e) {
@@ -957,8 +985,9 @@ public abstract class InboundSmsHandler extends StateMachine {
                 }
                 output.write(pdu, 0, pdu.length);
             }
-            int result = mWapPush.dispatchWapPdu(output.toByteArray(), resultReceiver,
-                    this, address);
+         //   int result = mWapPush.dispatchWapPdu(output.toByteArray(), resultReceiver,
+         //           this, address);
+           int result = mWapPush.dispatchWapPdu(output.toByteArray(), resultReceiver, this , pdus,address);
             if (DBG) log("dispatchWapPdu() returned " + result);
             // Add result of WAP-PUSH into metrics. RESULT_SMS_HANDLED indicates that the WAP-PUSH
             // needs to be ignored, so treating it as a success case.
@@ -978,12 +1007,17 @@ public abstract class InboundSmsHandler extends StateMachine {
                 return false;
             }
         }
-
-        if (block) {
+        /*UNISOC: Add for bug1072408*/
+        if (BlockChecker.isBlocked(mContext, tracker.getAddress(), null, blocktype)) {
+            Intent intent = new Intent("android.provider.Telephony.SMS_FILTER");
+            intent.putExtra("pdus", pdus);
+            intent.putExtra("format", tracker.getFormat());
+            BlockInboundSmsHandlerUtils.getInstance(mContext).blockSms(tracker.getAddress(), intent);
             deleteFromRawTable(tracker.getDeleteWhere(), tracker.getDeleteWhereArgs(),
                     DELETE_PERMANENTLY);
             return false;
         }
+        /* @} */
 
         boolean filterInvoked = filterSms(
             pdus, destPort, tracker, resultReceiver, true /* userUnlocked */);
@@ -1039,7 +1073,7 @@ public abstract class InboundSmsHandler extends StateMachine {
             mContext,
             0,
             new Intent(ACTION_OPEN_SMS_APP),
-            PendingIntent.FLAG_ONE_SHOT);
+                PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE);
         Notification.Builder mBuilder = new Notification.Builder(mContext)
                 .setSmallIcon(com.android.internal.R.drawable.sym_action_chat)
                 .setAutoCancel(true)

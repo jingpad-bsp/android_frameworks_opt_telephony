@@ -18,6 +18,7 @@ package com.android.internal.telephony.dataconnection;
 import android.content.Context;
 import android.net.NetworkConfig;
 import android.net.NetworkRequest;
+import android.telephony.data.ApnSetting;
 import android.telephony.data.ApnSetting.ApnType;
 
 import java.util.HashMap;
@@ -68,6 +69,9 @@ public class DcRequest implements Comparable<DcRequest> {
                     final int apnType = ApnContext.getApnTypeFromNetworkType(networkConfig.type);
                     sApnPriorityMap.put(apnType, networkConfig.priority);
                 }
+                /*UNISOC: support xcap for bug 579749 @{*/
+                sApnPriorityMap.put(ApnSetting.TYPE_XCAP, 2);
+                /* @} */
             }
         }
     }

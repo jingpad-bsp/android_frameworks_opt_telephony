@@ -17,6 +17,7 @@
 package com.android.internal.telephony.uicc;
 
 import android.annotation.UnsupportedAppUsage;
+import android.content.Intent;
 import android.content.Context;
 import android.content.res.Resources;
 import android.os.AsyncResult;
@@ -29,6 +30,7 @@ import android.telephony.SmsMessage;
 import android.telephony.SubscriptionInfo;
 import android.text.TextUtils;
 
+import com.android.internal.telephony.TelephonyIntents;
 import com.android.internal.telephony.CommandsInterface;
 import com.android.internal.telephony.MccTable;
 import com.android.internal.telephony.SmsConstants;
@@ -59,7 +61,7 @@ public class SIMRecords extends IccRecords {
 
     // ***** Cached SIM State; cleared on channel close
 
-    private int mCallForwardingStatus;
+    private int mCallForwardingStatus = CALL_FORWARDING_STATUS_UNKNOWN;//UNISOC: add for bug950781;
 
     /**
      * States only used by getSpnFsm FSM
@@ -181,7 +183,10 @@ public class SIMRecords extends IccRecords {
     public SIMRecords(UiccCardApplication app, Context c, CommandsInterface ci) {
         super(app, c, ci);
 
-        mAdnCache = new AdnRecordCache(mFh);
+        /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+        //mAdnCache = new AdnRecordCache(mFh);
+        mAdnCache = new AdnRecordCacheEx(mFh);
+        /* @} */
 
         mVmConfig = new VoiceMailConstants();
 
@@ -239,7 +244,9 @@ public class SIMRecords extends IccRecords {
         mFplmns = null;
         mEhplmns = null;
 
-        mAdnCache.reset();
+        /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+        //mAdnCache.reset();
+        /* @} */
 
         log("SIMRecords: onRadioOffOrNotAvailable set 'gsm.sim.operator.numeric' to operator=null");
         log("update icc_operator_numeric=" + null);
@@ -741,6 +748,11 @@ public class SIMRecords extends IccRecords {
 
                     mVoiceMailNum = adn.getNumber();
                     mVoiceMailTag = adn.getAlphaTag();
+                    /*UNISOC: Bug872933 if VoiceMailTag is parser as @,need to display default value @{ */
+                    if (!TextUtils.isEmpty(mVoiceMailTag) && mVoiceMailTag.matches("@*")) {
+                        mVoiceMailTag = "";
+                    }
+                    /*UNISOC: Bug872933 @} */
                     break;
 
                 case EVENT_GET_MSISDN_DONE:
@@ -824,11 +836,27 @@ public class SIMRecords extends IccRecords {
                     data = (byte[]) ar.result;
 
                     if (ar.exception != null) {
+                        //Add invalid ICCID cache
+                        log("Get iccid occur exception, set default value");
+                        mFullIccId = String.format("%020d",0);
+                        UiccSlot slot = UiccController.getInstance().getUiccSlotForPhone(mParentApp.getPhoneId());
+                        if (slot !=null) {
+                            String uiccSlotIccid = slot.getIccId();
+                            if (!TextUtils.isEmpty(uiccSlotIccid) && !uiccSlotIccid.matches("(F|f){20}")) {
+                                mFullIccId = slot.getIccId();
+                            }
+                        }
+                        mIccId = mFullIccId;
                         break;
                     }
 
-                    mIccId = IccUtils.bcdToString(data, 0, data.length);
+                    /* UNISOC: Fix AOSP IccId issue @{*/
                     mFullIccId = IccUtils.bchToString(data, 0, data.length);
+                    if (mFullIccId.matches("(F|f){20}")) {
+                        mFullIccId = String.format("%020d", 0);
+                    }
+                    mIccId = mFullIccId;
+                    /* @} */
 
                     log("iccid: " + SubscriptionInfo.givePrintableIccid(mFullIccId));
                     break;
@@ -846,6 +874,9 @@ public class SIMRecords extends IccRecords {
                             }
 
                             log("EF_AD: " + IccUtils.bytesToHexString(data));
+                            /*UNISOC: BUG1131047 for test usim @{ */
+                            mEfad = IccUtils.bytesToHexString(data);
+                            /*UNISOC: @} */
 
                             if (data.length < 3) {
                                 log("Corrupt AD data on SIM");
@@ -1208,7 +1239,7 @@ public class SIMRecords extends IccRecords {
                     data = (byte[]) ar.result;
                     if (ar.exception != null || data == null) {
                         loge("Failed getting Forbidden PLMNs: " + ar.exception);
-                        break;
+                        mFplmns = new String[0];
                     } else {
                         mFplmns = parseBcdPlmnList(data, "Forbidden");
                     }
@@ -1304,6 +1335,14 @@ public class SIMRecords extends IccRecords {
                 // TODO: Handle other cases, instead of fetching all.
                 mAdnCache.reset();
                 fetchSimRecords();
+                /*UNISOC: Feature porting for SIM_REFRESH @{ */
+                mParentApp.queryFdn();
+                log("onRefresh handleSimRefresh with SIM_FILE_UPDATED");
+                Intent intent = new Intent(TelephonyIntents.ACTION_SIM_REFRESH_FILEUPDATE);
+                intent.putExtra("phone_id", mParentApp.getPhoneId());
+                intent.addFlags(Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND);
+                mContext.sendBroadcast(intent);
+                /*UNISOC: @} */
                 break;
         }
     }
@@ -1490,6 +1529,8 @@ public class SIMRecords extends IccRecords {
 
     private void onLocked(int msg) {
         if (DBG) log("only fetch EF_LI, EF_PL and EF_ICCID in locked state");
+        mRecordsRequested = false;
+        mLoaded.set(false);
         mLockedRecordsReqReason = msg == EVENT_APP_LOCKED ? LOCKED_RECORDS_REQ_REASON_LOCKED :
                 LOCKED_RECORDS_REQ_REASON_NETWORK_LOCKED;
 
@@ -1932,6 +1973,31 @@ public class SIMRecords extends IccRecords {
 
         log("[CSP] Value Added Service Group (0xC0), not found!");
     }
+
+    /*UNISOC: BUG1131047 for test usim @{ */
+    @Override
+    public boolean isTestUsim() {
+        // EF_IMSI
+        String imsi = getIMSI();
+        log(" isTestUsim imsi: " + imsi);
+        if (!TextUtils.isEmpty(imsi) && imsi.length() > 5) {
+            String mccmnc = imsi.substring(0, 5);
+            if ("00101".equals(mccmnc) || "44201".equals(mccmnc)) {
+                return true;
+            }
+        }
+        // EF_AD
+        String efAd = mEfad;
+        log(" isTestUsim efAd: "  + efAd);
+        if (!TextUtils.isEmpty(efAd) && efAd.length() > 4) {
+            String ad = efAd.substring(0, 4);
+            if ("0800".equals(ad) || "0801".equals(ad)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    /*UNISOC: @} */
 
     @Override
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {

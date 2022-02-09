@@ -71,6 +71,8 @@ public class RuimRecords extends IccRecords {
     private String mHomeNetworkId;
     @UnsupportedAppUsage
     private String mNai;
+    // UNISOC Add MEID on CSIM
+    private String mMeid;
 
     @Override
     public String toString() {
@@ -407,11 +409,48 @@ public class RuimRecords extends IccRecords {
                 builder.append(String.format(Locale.US, "%03d", last3digits));
                 mMin = builder.toString();
                 if (DBG) log("min present=" + Rlog.pii(LOG_TAG, mMin));
+
+                // UNISOC add to update CDMA IMSI according to EF_IMSIM
+                try {
+                    updateCdmaImsi(data);
+                } catch (ArrayIndexOutOfBoundsException e) {
+                    loge("Invalid IMSI_M contents");
+                }
             } else {
                 if (DBG) log("min not present");
             }
         }
     }
+
+    /**
+     * UNISOC Add @{
+     * To update CDMA IMSI according to EF_IMSIM.
+     * AT+CIMI returns USIM IMSI, CSIM IMSI is stored in EF_IMSIM.
+     * CDMA IMSI = MCC + MNC + MIN
+     */
+    private void updateCdmaImsi(byte[] data) {
+        // C.S0065 section 5.2.2 for IMSI_M encoding
+        // C.S0005 section 2.3.1 for MIN encoding in IMSI_M.
+        int mcc = adjstMccDigits(((0x03 & data[9]) << 8) | (0xFF & data[8]));
+        int mnc = adjstMncDigits(data[6] & 0x7f);
+
+        String mccmnc = String.format("%03d%02d", mcc, mnc);
+        if (DBG) log("Update Cdma Imsi: " + mccmnc + "**********");
+        mImsi = mccmnc + mMin;
+    }
+
+    private int adjstMccDigits (int digits) {
+        // MCC is three digits so we can reuse Min method
+        return adjstMinDigits(digits);
+    }
+
+    private int adjstMncDigits (int digits) {
+        digits += 11;
+        digits = (digits % 10 == 0)?(digits - 10):digits;
+        digits = ((digits / 10) % 10 == 0)?(digits - 100):digits;
+        return digits;
+    }
+    /** @} **/
 
     private class EfCsimCdmaHomeLoaded implements IccRecordLoaded {
         @Override
@@ -685,11 +724,27 @@ public class RuimRecords extends IccRecords {
                 data = (byte[])ar.result;
 
                 if (ar.exception != null) {
+                    //Add invalid ICCID cache
+                    log("Get iccid occur exception, set default value");
+                    mFullIccId = String.format("%020d",0);
+                    UiccSlot slot = UiccController.getInstance().getUiccSlotForPhone(mParentApp.getPhoneId());
+                    if (slot !=null) {
+                        String uiccSlotIccid = slot.getIccId();
+                        if (!TextUtils.isEmpty(uiccSlotIccid) && !uiccSlotIccid.matches("(F|f){20}")) {
+                            mFullIccId = slot.getIccId();
+                        }
+                    }
+                    mIccId = mFullIccId;
                     break;
                 }
 
-                mIccId = IccUtils.bcdToString(data, 0, data.length);
                 mFullIccId = IccUtils.bchToString(data, 0, data.length);
+                 /* UNISOC: Fix AOSP IccId issue @{*/
+                if (mFullIccId.matches("(F|f){20}")) {
+                    mFullIccId = String.format("%020d", 0);
+                }
+                mIccId = mFullIccId;
+                /* @} */
 
                 log("iccid: " + SubscriptionInfo.givePrintableIccid(mFullIccId));
 
@@ -839,6 +894,8 @@ public class RuimRecords extends IccRecords {
 
     private void onLocked(int msg) {
         if (DBG) log("only fetch EF_ICCID in locked state");
+        mRecordsRequested = false;
+        mLoaded.set(false);
         mLockedRecordsReqReason = msg == EVENT_APP_LOCKED ? LOCKED_RECORDS_REQ_REASON_LOCKED :
                 LOCKED_RECORDS_REQ_REASON_NETWORK_LOCKED;
 
@@ -893,9 +950,48 @@ public class RuimRecords extends IccRecords {
                 obtainMessage(EVENT_GET_ICC_RECORD_DONE, new EfCsimMipUppLoaded()));
         mRecordsToLoad++;
 
+        // UNISOC Add:
+        // According to C.S 0065 EF_ESNME size is 8 bytes
+        mFh.loadEFTransparent(EF_ESNME, 8,
+                obtainMessage(EVENT_GET_ICC_RECORD_DONE, new EfCsimMeidLoaded()));
+        mRecordsToLoad++;
+
         if (DBG) log("fetchRuimRecords " + mRecordsToLoad + " requested: " + mRecordsRequested);
         // Further records that can be inserted are Operator/OEM dependent
     }
+
+    // UNISOC Add to read/write MEID on CSIM @{
+    private class EfCsimMeidLoaded implements IccRecordLoaded {
+        @Override
+        public String getEfName() {
+            return "EF_ESNME";
+        }
+        @Override
+        public void onRecordLoaded(AsyncResult ar) {
+            onGetCSimMeidDone(ar);
+        }
+    }
+
+    private void onGetCSimMeidDone(AsyncResult ar) {
+        byte[] data = (byte[]) ar.result;
+        String hexStr = IccUtils.bytesToHexString(data);
+        String meid = "";
+        // C.S0065 section 5.2.24:
+        // EF_ESNME size is 8 bytes and the high 7 bytes are MEID
+        if (hexStr != null && hexStr.length() == 16) {
+            for (int i = 0; i < 7; i++) {
+                meid += hexStr.charAt(14 - 2 * i) + "" + hexStr.charAt(15 - 2 * i);
+            }
+        } else {
+            loge("Fail to get MEID on CSIM.");
+        }
+        mMeid = meid;
+    }
+
+    public String getMeid() {
+        return mMeid;
+    }
+    // @}
 
     @Override
     public boolean isProvisioned() {

@@ -36,12 +36,15 @@ import android.text.TextUtils;
 import com.android.internal.telephony.cdma.CdmaSubscriptionSourceManager;
 import com.android.internal.telephony.cdma.EriManager;
 import com.android.internal.telephony.dataconnection.DataEnabledSettings;
+import com.android.internal.telephony.dataconnection.DcTrackerEx;
 import com.android.internal.telephony.dataconnection.DcTracker;
 import com.android.internal.telephony.dataconnection.TransportManager;
 import com.android.internal.telephony.emergency.EmergencyNumberTracker;
+import com.android.internal.telephony.unisoc.emergency.EmergencyNumberTrackerEx;
 import com.android.internal.telephony.imsphone.ImsExternalCallTracker;
 import com.android.internal.telephony.imsphone.ImsPhone;
 import com.android.internal.telephony.imsphone.ImsPhoneCallTracker;
+import com.android.internal.telephony.imsphone.ImsPhoneCallTrackerEx;
 import com.android.internal.telephony.uicc.IccCardStatus;
 import com.android.internal.telephony.uicc.UiccCard;
 import com.android.internal.telephony.uicc.UiccProfile;
@@ -270,7 +273,10 @@ public class TelephonyComponentFactory {
     }
 
     public GsmCdmaCallTracker makeGsmCdmaCallTracker(GsmCdmaPhone phone) {
-        return new GsmCdmaCallTracker(phone);
+        /*UNISOC: modify for IMS
+          @Orig:return new GsmCdmaCallTracker(phone);{*/
+        return new GsmCdmaCallTrackerEx(phone);
+        /*@}*/
     }
 
     public SmsStorageMonitor makeSmsStorageMonitor(Phone phone) {
@@ -289,7 +295,7 @@ public class TelephonyComponentFactory {
      * Create a new EmergencyNumberTracker.
      */
     public EmergencyNumberTracker makeEmergencyNumberTracker(Phone phone, CommandsInterface ci) {
-        return new EmergencyNumberTracker(phone, ci);
+        return new EmergencyNumberTrackerEx(phone, ci);
     }
 
     /**
@@ -312,7 +318,7 @@ public class TelephonyComponentFactory {
     }
 
     public DcTracker makeDcTracker(Phone phone, @TransportType int transportType) {
-        return new DcTracker(phone, transportType);
+        return new DcTrackerEx(phone, transportType);
     }
 
     public CarrierSignalAgent makeCarrierSignalAgent(Phone phone) {
@@ -328,11 +334,14 @@ public class TelephonyComponentFactory {
     }
 
     public IccPhoneBookInterfaceManager makeIccPhoneBookInterfaceManager(Phone phone) {
-        return new IccPhoneBookInterfaceManager(phone);
+        /* UNISOC: Add for bug1072750, AndroidQ porting for USIM/SIM phonebook @{ */
+        //return new IccPhoneBookInterfaceManager(phone);
+        return new IccPhoneBookInterfaceManagerEx(phone);
+        /* @} */
     }
 
     public IccSmsInterfaceManager makeIccSmsInterfaceManager(Phone phone) {
-        return new IccSmsInterfaceManager(phone);
+        return new IccSmsInterfaceManagerEx(phone);
     }
 
     /**
@@ -381,7 +390,10 @@ public class TelephonyComponentFactory {
     }
 
     public ImsPhoneCallTracker makeImsPhoneCallTracker(ImsPhone imsPhone) {
-        return new ImsPhoneCallTracker(imsPhone);
+        /*UNISOC: modify for IMS
+          @Orig:return new ImsPhoneCallTracker(imsPhone);{*/
+        return new ImsPhoneCallTrackerEx(imsPhone);
+        /*@}*/
     }
 
     public ImsExternalCallTracker makeImsExternalCallTracker(ImsPhone imsPhone) {

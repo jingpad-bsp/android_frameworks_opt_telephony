@@ -139,6 +139,7 @@ public abstract class BaseCommands implements CommandsInterface {
     protected Registrant mCatCcAlphaRegistrant;
     @UnsupportedAppUsage
     protected Registrant mSsRegistrant;
+    protected RegistrantList mSsnRegistrants = new RegistrantList();//UNISOC add for IMS
 
     // Preferred network type received from PhoneFactory.
     // This is used when establishing a connection to the
@@ -445,15 +446,25 @@ public abstract class BaseCommands implements CommandsInterface {
 
     @Override
     public void setOnSuppServiceNotification(Handler h, int what, Object obj) {
-        mSsnRegistrant = new Registrant (h, what, obj);
+        /* UNISOC: add for IMS
+         * @Org: mSsnRegistrants.addUnique(h, what, obj);
+         *{ */
+        Registrant r = new Registrant(h, what, obj);
+        mSsnRegistrants.add(r);
+        /* @} */
     }
 
     @Override
     public void unSetOnSuppServiceNotification(Handler h) {
-        if (mSsnRegistrant != null && mSsnRegistrant.getHandler() == h) {
-            mSsnRegistrant.clear();
-            mSsnRegistrant = null;
-        }
+        /* UNISOC: add for IMS
+         * @Org:
+         *if (mSsnRegistrant != null && mSsnRegistrant.getHandler() == h) {
+         *    mSsnRegistrant.clear();
+         *    mSsnRegistrant = null;
+         *}
+         *{ */
+        mSsnRegistrants.remove(h);
+        /* @} */
     }
 
     @Override

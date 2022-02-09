@@ -79,16 +79,16 @@ public class EmergencyNumberTracker extends Handler {
 
     private final CommandsInterface mCi;
     private final Phone mPhone;
-    private String mCountryIso;
+    protected String mCountryIso;
     private String[] mEmergencyNumberPrefix = new String[0];
 
     private static final String EMERGENCY_NUMBER_DB_ASSETS_FILE = "eccdata";
 
-    private List<EmergencyNumber> mEmergencyNumberListFromDatabase = new ArrayList<>();
+    protected List<EmergencyNumber> mEmergencyNumberListFromDatabase = new ArrayList<>();
     private List<EmergencyNumber> mEmergencyNumberListFromRadio = new ArrayList<>();
     private List<EmergencyNumber> mEmergencyNumberListWithPrefix = new ArrayList<>();
     private List<EmergencyNumber> mEmergencyNumberListFromTestMode = new ArrayList<>();
-    private List<EmergencyNumber> mEmergencyNumberList = new ArrayList<>();
+    protected List<EmergencyNumber> mEmergencyNumberList = new ArrayList<>();
 
     private final LocalLog mEmergencyNumberListDatabaseLocalLog = new LocalLog(20);
     private final LocalLog mEmergencyNumberListRadioLocalLog = new LocalLog(20);
@@ -274,7 +274,7 @@ public class EmergencyNumberTracker extends Handler {
         this.obtainMessage(EVENT_UPDATE_DB_COUNTRY_ISO_CHANGED, countryIso).sendToTarget();
     }
 
-    private EmergencyNumber convertEmergencyNumberFromEccInfo(EccInfo eccInfo, String countryIso) {
+    protected EmergencyNumber convertEmergencyNumberFromEccInfo(EccInfo eccInfo, String countryIso) {
         String phoneNumber = eccInfo.phoneNumber.trim();
         if (phoneNumber.isEmpty()) {
             loge("EccInfo has empty phone number.");
@@ -425,7 +425,7 @@ public class EmergencyNumberTracker extends Handler {
      * Update emergency numbers based on the radio, database, and test mode, if they are the same
      * emergency numbers.
      */
-    private void updateEmergencyNumberList() {
+    protected void updateEmergencyNumberList() {
         List<EmergencyNumber> mergedEmergencyNumberList =
                 new ArrayList<>(mEmergencyNumberListFromDatabase);
         mergedEmergencyNumberList.addAll(mEmergencyNumberListFromRadio);
@@ -830,12 +830,12 @@ public class EmergencyNumberTracker extends Handler {
         return new ArrayList<>(mEmergencyNumberListFromRadio);
     }
 
-    private static void logd(String str) {
-        Rlog.d(TAG, str);
+    private void logd(String str) {
+        Rlog.d(TAG, "[" + mPhone.getPhoneId() + "] " + str);
     }
 
-    private static void loge(String str) {
-        Rlog.e(TAG, str);
+    private void loge(String str) {
+        Rlog.e(TAG, "[" + mPhone.getPhoneId() + "] " + str);
     }
 
     private void writeUpdatedEmergencyNumberListMetrics(

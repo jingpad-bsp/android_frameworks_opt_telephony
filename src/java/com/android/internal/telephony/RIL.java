@@ -968,6 +968,10 @@ public class RIL extends BaseCommands implements CommandsInterface {
     public void dial(String address, boolean isEmergencyCall, EmergencyNumber emergencyNumberInfo,
                      boolean hasKnownUserIntentEmergency, int clirMode, UUSInfo uusInfo,
                      Message result) {
+
+        riljLog("dial" + "> " + "isEmergencyCall " + isEmergencyCall + "  emergencyNumberInfo: " + emergencyNumberInfo
+                + " mRadioVersion " + mRadioVersion);
+
         if (isEmergencyCall && mRadioVersion.greaterOrEqual(RADIO_HAL_VERSION_1_4)
                 && emergencyNumberInfo != null) {
             emergencyDial(address, emergencyNumberInfo, hasKnownUserIntentEmergency, clirMode,
@@ -1029,9 +1033,12 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 riljLog(rr.serialString() + "> " + requestToString(rr.mRequest));
             }
 
+
             try {
                 radioProxy14.emergencyDial(rr.mSerial, dialInfo,
-                        emergencyNumberInfo.getEmergencyServiceCategoryBitmaskInternalDial(),
+                        //UNISOC: support get service category bitmask from eccdata
+                        //emergencyNumberInfo.getEmergencyServiceCategoryBitmaskInternalDial(),
+                        emergencyNumberInfo.getEmergencyServiceCategoryBitmask(),
                         emergencyNumberInfo.getEmergencyUrns() != null
                                 ? new ArrayList(emergencyNumberInfo.getEmergencyUrns())
                                 : new ArrayList<>(),
@@ -2978,6 +2985,9 @@ public class RIL extends BaseCommands implements CommandsInterface {
     }
 
     private void constructCdmaSendSmsRilRequest(CdmaSmsMessage msg, byte[] pdu) {
+        if(RILJ_LOGD){
+            Rlog.d("RILJ", "constructCdmaSendSmsRilRequest pdu hex:" + IccUtils.bytesToHexString(pdu));
+        }
         int addrNbrOfDigits;
         int subaddrNbrOfDigits;
         int bearerDataLength;
@@ -3236,7 +3246,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
             RILRequest rr = obtainRequest(RIL_REQUEST_CDMA_WRITE_SMS_TO_RUIM, result,
                     mRILDefaultWorkSource);
 
-            if (RILJ_LOGV) {
+            if (RILJ_LOGD) {
                 riljLog(rr.serialString() + "> "
                         + requestToString(rr.mRequest)
                         + " status = " + status);
@@ -3244,7 +3254,10 @@ public class RIL extends BaseCommands implements CommandsInterface {
 
             CdmaSmsWriteArgs args = new CdmaSmsWriteArgs();
             args.status = status;
-            constructCdmaSendSmsRilRequest(args.message, pdu.getBytes());
+            /*bug 1082044, begin*/
+            //constructCdmaSendSmsRilRequest(args.message, pdu.getBytes());
+            constructCdmaSendSmsRilRequest(args.message, IccUtils.hexStringToBytes(pdu));
+            /*bug 1082044, end*/
 
             try {
                 radioProxy.writeSmsToRuim(rr.mSerial, args);
@@ -5651,6 +5664,8 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 return "RIL_UNSOL_KEEPALIVE_STATUS";
             case RIL_UNSOL_PHYSICAL_CHANNEL_CONFIG:
                 return "RIL_UNSOL_PHYSICAL_CHANNEL_CONFIG";
+            case  RIL_UNSOL_EMERGENCY_NUMBER_LIST:
+                return "UNSOL_EMERGENCY_NUMBER_LIST";
             default:
                 return "<unknown response>";
         }

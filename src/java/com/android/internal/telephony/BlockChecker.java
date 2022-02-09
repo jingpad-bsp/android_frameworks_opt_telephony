@@ -4,6 +4,7 @@ import android.content.Context;
 import android.os.Bundle;
 import android.provider.BlockedNumberContract;
 import android.telephony.Rlog;
+import android.telephony.TelephonyManager;
 
 /**
  * {@hide} Checks for blocked phone numbers against {@link BlockedNumberContract}
@@ -11,6 +12,8 @@ import android.telephony.Rlog;
 public class BlockChecker {
     private static final String TAG = "BlockChecker";
     private static final boolean VDBG = false; // STOPSHIP if true.
+    private static int sCallBlockType = 1;
+    private static int sSmsBlockType = 2;
 
     /**
      * Returns {@code true} if {@code phoneNumber} is blocked according to {@code extras}.
@@ -24,11 +27,12 @@ public class BlockChecker {
      * @param phoneNumber the number to check.
      * @return {@code true} if the number is blocked. {@code false} otherwise.
      */
-    @Deprecated
-    public static boolean isBlocked(Context context, String phoneNumber) {
-        return isBlocked(context, phoneNumber, null /* extras */);
-    }
-
+    /*UNISOC: Add for bug1072408*/
+//    @Deprecated
+//    public static boolean isBlocked(Context context, String phoneNumber) {
+//        return isBlocked(context, phoneNumber, null /* extras */);
+//    }
+    /* @} */
     /**
      * Returns {@code true} if {@code phoneNumber} is blocked according to {@code extras}.
      * <p>
@@ -40,11 +44,10 @@ public class BlockChecker {
      * @param extras the extra attribute of the number.
      * @return {@code true} if the number is blocked. {@code false} otherwise.
      */
-    public static boolean isBlocked(Context context, String phoneNumber, Bundle extras) {
-        return getBlockStatus(context, phoneNumber, extras)
+    public static boolean isBlocked(Context context, String phoneNumber, Bundle extras, int blockType) {
+        return getBlockStatus(context, phoneNumber, extras, blockType)
                 != BlockedNumberContract.STATUS_NOT_BLOCKED;
     }
-
     /**
      * Returns the call blocking status for the {@code phoneNumber}.
      * <p>
@@ -62,18 +65,53 @@ public class BlockChecker {
      *         {@link BlockedNumberContract#STATUS_BLOCKED_RESTRICTED},
      *         {@link BlockedNumberContract#STATUS_BLOCKED_UNKNOWN_NUMBER}.
      */
-    public static int getBlockStatus(Context context, String phoneNumber, Bundle extras) {
+    /*UNISOC: Add for bug1072408*/
+    public static int getBlockStatus(Context context, String phoneNumber, Bundle extras, int blockType) {
         int blockStatus = BlockedNumberContract.STATUS_NOT_BLOCKED;
         long startTimeNano = System.nanoTime();
-
-        try {
-            blockStatus = BlockedNumberContract.SystemContract.shouldSystemBlockNumber(
-                    context, phoneNumber, extras);
-            if (blockStatus != BlockedNumberContract.STATUS_NOT_BLOCKED) {
-                Rlog.d(TAG, phoneNumber + " is blocked.");
+        boolean isCallBlock;
+        boolean isSmsBlock;
+        TelephonyManager tm = TelephonyManager.from( context );
+        if (blockType == sCallBlockType) {
+            if (tm != null && tm.isCallFireWallInstalled()) {
+                isCallBlock = tm.checkIsBlockCallNumber( context, phoneNumber );
+            } else {
+                isCallBlock = false;
             }
-        } catch (Exception e) {
-            Rlog.e(TAG, "Exception checking for blocked number: " + e);
+            try {
+                blockStatus = BlockedNumberContract.SystemContract.shouldSystemBlockNumber(
+                        context, phoneNumber, extras );
+                if ((blockStatus != BlockedNumberContract.STATUS_NOT_BLOCKED) && isCallBlock) {
+                    Rlog.d( TAG, phoneNumber + " is call blocked." );
+                    blockStatus = BlockedNumberContract.STATUS_BLOCKED_IN_LIST;
+                } else {
+                    Rlog.d( TAG, phoneNumber + " is not call blocked." );
+                    blockStatus = BlockedNumberContract.STATUS_NOT_BLOCKED;
+                }
+            } catch (Exception e) {
+                Rlog.e( TAG, "Exception checking for blocked number: " + e );
+            }
+        }
+
+        if (blockType == sSmsBlockType) {
+            if (tm != null && tm.isCallFireWallInstalled()) {
+                isSmsBlock = tm.checkIsBlockSMSNumber( context, phoneNumber );
+            } else {
+                isSmsBlock = false;
+            }
+            try {
+                blockStatus = BlockedNumberContract.SystemContract.shouldSystemBlockNumber(
+                        context, phoneNumber, extras );
+                if ((blockStatus != BlockedNumberContract.STATUS_NOT_BLOCKED) && isSmsBlock) {
+                    Rlog.d( TAG, phoneNumber + " is sms blocked." );
+                    blockStatus = BlockedNumberContract.STATUS_BLOCKED_IN_LIST;
+                } else {
+                    Rlog.d( TAG, phoneNumber + " is not sms blocked." );
+                    blockStatus = BlockedNumberContract.STATUS_NOT_BLOCKED;
+                }
+            } catch (Exception e) {
+                Rlog.e( TAG, "Exception checking for blocked number: " + e );
+            }
         }
 
         int durationMillis = (int) ((System.nanoTime() - startTimeNano) / 1000000);
@@ -82,4 +120,5 @@ public class BlockChecker {
         }
         return blockStatus;
     }
+    /* @} */
 }

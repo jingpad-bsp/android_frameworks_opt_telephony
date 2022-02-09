@@ -76,6 +76,9 @@ public class GsmCdmaConnection extends Connection {
 
     private PowerManager.WakeLock mPartialWakeLock;
 
+    // UNISOC: add for bug 1113109
+    private String mCnapCallingName = "";
+
     // The cached delay to be used between DTMF tones fetched from carrier config.
     private int mDtmfToneDelay = 0;
 
@@ -171,6 +174,7 @@ public class GsmCdmaConnection extends Connection {
         if (!isPhoneTypeGsm()) {
             Rlog.d(LOG_TAG, "[GsmCdmaConn] GsmCdmaConnection: dialString=" +
                     maskDialString(dialString));
+            mDialString = dialString;
             dialString = formatDialString(dialString);
             Rlog.d(LOG_TAG,
                     "[GsmCdmaConn] GsmCdmaConnection:formated dialString=" +
@@ -535,7 +539,9 @@ public class GsmCdmaConnection extends Connection {
 
             case CallFailCause.USER_ALERTING_NO_ANSWER:
                 return DisconnectCause.TIMED_OUT;
-
+            //UNISOC:add for bug839181
+            case CallFailCause.ANSWERED_ELSEWHERE:
+                return DisconnectCause.ANSWERED_ELSEWHERE;
             case CallFailCause.ACCESS_CLASS_BLOCKED:
             case CallFailCause.ERROR_UNSPECIFIED:
             case CallFailCause.NORMAL_CLEARING:
@@ -684,7 +690,13 @@ public class GsmCdmaConnection extends Connection {
         }
 
         // A null cnapName should be the same as ""
-        if (TextUtils.isEmpty(dc.name)) {
+        // UNISOC: add for bug 1113109
+        if (!mCnapCallingName.equals("")) {
+            if (!mCnapCallingName.equals(mCnapName)) {
+                changed = true;
+                mCnapName = mCnapCallingName;
+            }
+        } else if (TextUtils.isEmpty(dc.name)) {
             if (!TextUtils.isEmpty(mCnapName)) {
                 changed = true;
                 mCnapName = "";
@@ -695,7 +707,12 @@ public class GsmCdmaConnection extends Connection {
         }
 
         if (Phone.DEBUG_PHONE) log("--dssds----"+mCnapName);
-        mCnapNamePresentation = dc.namePresentation;
+        // UNISOC: add for bug 1113109
+        if (!mCnapCallingName.equals("")) {
+            mCnapNamePresentation = PhoneConstants.PRESENTATION_ALLOWED;
+        } else {
+            mCnapNamePresentation = dc.namePresentation;
+        }
         mNumberPresentation = dc.numberPresentation;
 
         if (newParent != mParent) {
@@ -1210,4 +1227,18 @@ public class GsmCdmaConnection extends Connection {
     public boolean isOtaspCall() {
         return mAddress != null && OTASP_NUMBER.equals(mAddress);
     }
+
+    /*UNISOC: Add for UNISOC IMS implement@{ */
+    public int getGsmCdmaConnIndex() throws CallStateException {
+        return getGsmCdmaIndex();
+    }
+    /*@}*/
+
+    /* UNISOC: Add for bug Bug 1113109 @{ */
+    public void updateCnap(String cnapCallingName){
+        mCnapCallingName = cnapCallingName;
+        mCnapName = mCnapCallingName;
+        mCnapNamePresentation = PhoneConstants.PRESENTATION_ALLOWED;
+    }
+    /* @} */
 }

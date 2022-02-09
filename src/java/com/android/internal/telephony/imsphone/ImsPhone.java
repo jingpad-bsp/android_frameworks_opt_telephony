@@ -34,6 +34,7 @@ import static com.android.internal.telephony.CommandsInterface.CF_REASON_BUSY;
 import static com.android.internal.telephony.CommandsInterface.CF_REASON_NOT_REACHABLE;
 import static com.android.internal.telephony.CommandsInterface.CF_REASON_NO_REPLY;
 import static com.android.internal.telephony.CommandsInterface.CF_REASON_UNCONDITIONAL;
+import static com.android.internal.telephony.CommandsInterface.CF_REASON_NOT_REGISTERED;
 import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_NONE;
 import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_VOICE;
 
@@ -108,6 +109,7 @@ import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
+import android.telephony.CarrierConfigManagerEx;
 
 /**
  * {@hide}
@@ -673,7 +675,7 @@ public class ImsPhone extends ImsPhoneBase {
         return result;
     }
 
-    boolean isInCall() {
+    public boolean isInCall() {
         ImsPhoneCall.State foregroundCallState = getForegroundCall().getState();
         ImsPhoneCall.State backgroundCallState = getBackgroundCall().getState();
         ImsPhoneCall.State ringingCallState = getRingingCall().getState();
@@ -884,6 +886,8 @@ public class ImsPhone extends ImsPhoneBase {
             case CF_REASON_NOT_REACHABLE: return ImsUtInterface.CDIV_CF_NOT_REACHABLE;
             case CF_REASON_ALL: return ImsUtInterface.CDIV_CF_ALL;
             case CF_REASON_ALL_CONDITIONAL: return ImsUtInterface.CDIV_CF_ALL_CONDITIONAL;
+            // UNISOC: add for Bug 1005658
+            case CF_REASON_NOT_REGISTERED: return ImsUtInterface.CDIV_CF_NOT_LOGGED_IN;
             default:
                 break;
         }
@@ -899,6 +903,8 @@ public class ImsPhone extends ImsPhoneBase {
             case ImsUtInterface.CDIV_CF_NOT_REACHABLE: return CF_REASON_NOT_REACHABLE;
             case ImsUtInterface.CDIV_CF_ALL: return CF_REASON_ALL;
             case ImsUtInterface.CDIV_CF_ALL_CONDITIONAL: return CF_REASON_ALL_CONDITIONAL;
+            // UNISOC: add for Bug 1005658
+            case ImsUtInterface.CDIV_CF_NOT_LOGGED_IN: return CF_REASON_NOT_REGISTERED;
             default:
                 break;
         }
@@ -1234,7 +1240,11 @@ public class ImsPhone extends ImsPhoneBase {
     /* package */
     void onIncomingUSSD(int ussdMode, String ussdMessage) {
         if (DBG) logd("onIncomingUSSD ussdMode=" + ussdMode);
-
+        //add for unisoc 1079349
+        if (isNCRUssdString() && !TextUtils.isEmpty(ussdMessage)) {
+            ussdMessage = decodeNCR(ussdMessage);
+            logi("onIncomingUSSD isMaybeNCRUssdString, after decodeNCR ussdMessage =" + ussdMessage);
+        }
         boolean isUssdError;
         boolean isUssdRequest;
 
@@ -1273,6 +1283,55 @@ public class ImsPhone extends ImsPhoneBase {
                 onNetworkInitiatedUssd(mmi);
         }
     }
+    //add for unisoc 1079349
+    private boolean isNCRUssdString() {
+        CarrierConfigManager carrierMgr = (CarrierConfigManager) mContext
+                .getSystemService(Context.CARRIER_CONFIG_SERVICE);
+        if ((carrierMgr != null)
+                && (carrierMgr.getConfigForSubId(getSubId()) != null)) {
+            return carrierMgr.getConfigForSubId(getSubId()).getBoolean(
+                    CarrierConfigManagerEx.KEY_SUPPORT_NCR_USSD_STRING);
+        }
+        return false;
+
+    }
+
+    //add for unisoc 1079349
+    private String decodeNCR(String str) {
+        StringBuffer sb = new StringBuffer();
+        int ncrSymbolPosition;
+        int numericPosition = 0;
+
+        while (numericPosition < str.length()) {
+            ncrSymbolPosition = str.indexOf("&#", numericPosition);
+            if (ncrSymbolPosition == -1) {
+                sb.append(str.substring(numericPosition));
+                break;
+            }
+            sb.append(str.substring(numericPosition, ncrSymbolPosition));
+            numericPosition = str.indexOf(";", ncrSymbolPosition);
+            if (numericPosition == -1) {
+                sb.append(str.substring(ncrSymbolPosition));
+                break;
+            }
+
+            String tok = str.substring(ncrSymbolPosition + "&#".length(), numericPosition);
+            try {
+                int radix = 10;
+                if (tok.charAt(0) == 'x' || tok.charAt(0) == 'X') {
+                    radix = 16;
+                    tok = tok.substring(1);
+                }
+                sb.append((char) Integer.parseInt(tok, radix));
+            } catch (NumberFormatException exp) {
+                loge("decodeNCR exp:");
+                exp.printStackTrace();
+            }
+            numericPosition++;
+        }
+        return sb.toString();
+    }
+
 
     /**
      * Removes the given MMI from the pending list and notifies
@@ -1970,6 +2029,19 @@ public class ImsPhone extends ImsPhoneBase {
         return psInfo != null && csInfo != null && !csInfo.isInService()
                 && psInfo.getAccessNetworkTechnology() == TelephonyManager.NETWORK_TYPE_IWLAN;
     }
+
+    /* UNISOC: Add for UNISOC IMS implement@{ */
+    void setLastDialString(String dialString){
+        mLastDialString = dialString;
+    }
+
+    public void setVoiceCallForwardingFlagWithIccRecord(
+            IccRecords r, int line, boolean enable, String number) {
+        if (r != null) {
+            setVoiceCallForwardingFlag(r, line, enable, number);
+        }
+    }
+    /*@}*/
 
     @Override
     public void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
